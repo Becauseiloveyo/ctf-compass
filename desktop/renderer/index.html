@@ -1,174 +1,192 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CTF Compass</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
-  <body>
+  <body data-theme="light">
     <div class="app-shell">
-      <aside class="sidebar">
-        <div class="brand">
-          <div class="brand-mark">CC</div>
+      <header class="topbar">
+        <div class="brand-row">
+          <div class="brand-icon">CC</div>
           <div>
-            <p class="eyebrow">Desktop Workbench</p>
-            <h1>CTF Compass</h1>
+            <p class="overline" data-i18n="appTag">桌面解题工作台</p>
+            <h1 data-i18n="appTitle">CTF Compass</h1>
           </div>
         </div>
-        <p class="sidebar-copy">
-          Unified challenge triage, guided methodology, and category-aware notes for lawful CTF practice.
-        </p>
 
-        <section class="sidebar-panel">
-          <p class="panel-label">Focus Areas</p>
-          <div class="pill-grid">
-            <span>Crypto</span>
-            <span>Web</span>
-            <span>Reverse</span>
-            <span>Pwn</span>
-            <span>Forensic</span>
-            <span>Misc</span>
-          </div>
-        </section>
+        <div class="toolbar">
+          <button id="lang-toggle" class="text-button" type="button">EN</button>
+          <button id="theme-toggle" class="theme-switch" type="button" aria-label="切换主题">
+            <span class="theme-switch-track">
+              <span class="theme-switch-label">浅色</span>
+              <span class="theme-switch-thumb"></span>
+              <span class="theme-switch-label">暗色</span>
+            </span>
+          </button>
+        </div>
+      </header>
 
-        <section class="sidebar-panel sidebar-panel-contrast">
-          <p class="panel-label">Outcome</p>
-          <h2>From vague prompt to an actionable path</h2>
-          <p>
-            The app classifies the challenge, surfaces the likely methodology, and turns the first hour of triage into
-            a structured workflow.
-          </p>
-        </section>
-      </aside>
-
-      <main class="main-stage">
-        <section class="hero-card reveal">
-          <div>
-            <p class="eyebrow">Guided Analysis</p>
-            <h2>Build a desktop-grade CTF cockpit, not another plain form.</h2>
-            <p class="hero-copy">
-              Feed a title, description, and tags. The workbench returns a category decision, confidence score,
-              investigation checklist, and tool hints tuned for that challenge family.
+      <main class="content-grid">
+        <aside class="settings-pane">
+          <section class="settings-card hero-card">
+            <p class="overline" data-i18n="heroTag">统一分析入口</p>
+            <h2 data-i18n="heroTitle">像手机设置一样，直接、清晰、好用。</h2>
+            <p class="muted" data-i18n="heroCopy">
+              输入题目标题、描述和标签，应用会给出题型判断、方法指引、工具建议和后续步骤。
             </p>
-          </div>
-          <div class="hero-stats">
-            <div>
-              <span>Modes</span>
-              <strong>6</strong>
-            </div>
-            <div>
-              <span>Workflow</span>
-              <strong>Desktop</strong>
-            </div>
-            <div>
-              <span>Packaging</span>
-              <strong>Installer</strong>
-            </div>
-          </div>
-        </section>
+          </section>
 
-        <section class="workspace">
-          <form id="analyze-form" class="input-panel reveal">
-            <div class="panel-header">
+          <section class="settings-card">
+            <div class="section-head">
               <div>
-                <p class="eyebrow">Challenge Intake</p>
-                <h3>Analyze a challenge</h3>
+                <p class="overline" data-i18n="inputTag">题目录入</p>
+                <h3 data-i18n="inputTitle">新建分析</h3>
               </div>
-              <button id="analyze-button" type="submit">Run analysis</button>
+              <span id="app-meta" class="chip">加载中...</span>
             </div>
 
-            <label>
-              <span>Title</span>
-              <input id="title" name="title" placeholder="Example: Ghost Session" required />
-            </label>
+            <form id="analyze-form" class="settings-form">
+              <label class="field">
+                <span data-i18n="fieldTitle">题目标题</span>
+                <input id="title" name="title" placeholder="例如：Ghost Session" required />
+              </label>
 
-            <label>
-              <span>Description</span>
-              <textarea
-                id="description"
-                name="description"
-                rows="6"
-                placeholder="Paste the prompt, observations, attachments summary, and suspected behavior."
-              ></textarea>
-            </label>
+              <label class="field">
+                <span data-i18n="fieldDescription">题目描述</span>
+                <textarea
+                  id="description"
+                  name="description"
+                  rows="6"
+                  placeholder="粘贴题目说明、附件摘要、已有线索、异常行为。"
+                ></textarea>
+              </label>
 
-            <label>
-              <span>Tags</span>
-              <input id="tags" name="tags" placeholder="web auth jwt ssti" />
-            </label>
+              <label class="field">
+                <span data-i18n="fieldTags">标签</span>
+                <input id="tags" name="tags" placeholder="web auth cookie jwt" />
+              </label>
 
-            <div class="preset-row">
-              <button class="preset" type="button" data-preset="crypto">RSA Warmup</button>
-              <button class="preset" type="button" data-preset="web">Web Session</button>
-              <button class="preset" type="button" data-preset="reverse">Obfuscated Binary</button>
-            </div>
+              <div class="preset-group">
+                <button class="preset-chip" type="button" data-preset="crypto" data-i18n="presetCrypto">
+                  RSA 热身
+                </button>
+                <button class="preset-chip" type="button" data-preset="web" data-i18n="presetWeb">
+                  Web 会话题
+                </button>
+                <button class="preset-chip" type="button" data-preset="reverse" data-i18n="presetReverse">
+                  混淆二进制
+                </button>
+              </div>
 
-            <p id="status" class="status-line">Ready. Local Python bridge will be used for analysis.</p>
-          </form>
+              <button id="analyze-button" class="primary-button" type="submit" data-i18n="analyzeButton">
+                开始分析
+              </button>
 
-          <section class="results-panel reveal">
-            <div class="panel-header">
+              <p id="status" class="status-text" data-i18n="statusReady">
+                已就绪，将通过本地 Python 分析桥执行分类。
+              </p>
+            </form>
+          </section>
+
+          <section class="settings-card compact-card">
+            <div class="section-head">
               <div>
-                <p class="eyebrow">Analysis Output</p>
-                <h3>Challenge briefing</h3>
+                <p class="overline" data-i18n="focusTag">关注题型</p>
+                <h3 data-i18n="focusTitle">内置方向</h3>
               </div>
-              <span id="app-meta" class="meta-badge">Loading app metadata...</span>
             </div>
-
-            <div id="empty-state" class="empty-state">
-              <h4>No challenge analyzed yet</h4>
-              <p>Run the analyzer to populate the classification card, methodology checklist, and tool suggestions.</p>
+            <div class="list-stack">
+              <div class="mini-row"><span>Crypto</span><span class="mini-note" data-i18n="focusCrypto">密码分析</span></div>
+              <div class="mini-row"><span>Web</span><span class="mini-note" data-i18n="focusWeb">Web 解题引导</span></div>
+              <div class="mini-row"><span>Reverse</span><span class="mini-note" data-i18n="focusReverse">逆向分析</span></div>
+              <div class="mini-row"><span>Pwn</span><span class="mini-note" data-i18n="focusPwn">内存利用</span></div>
+              <div class="mini-row"><span>Forensic</span><span class="mini-note" data-i18n="focusForensic">取证排查</span></div>
+              <div class="mini-row"><span>Misc</span><span class="mini-note" data-i18n="focusMisc">杂项归类</span></div>
             </div>
+          </section>
+        </aside>
 
-            <div id="result-view" class="result-view hidden">
-              <div class="result-topline">
-                <div>
-                  <p class="result-label">Category</p>
-                  <h4 id="category-name">Web</h4>
-                </div>
-                <div class="confidence-ring">
-                  <span id="confidence-value">0.80</span>
-                  <small>confidence</small>
-                </div>
+        <section class="results-pane">
+          <section class="settings-card summary-card">
+            <div class="summary-main">
+              <div>
+                <p class="overline" data-i18n="summaryTag">分析摘要</p>
+                <h2 id="category-name" data-i18n="emptyCategory">等待分析</h2>
+                <p id="reason-text" class="muted" data-i18n="emptyReason">
+                  运行一次分析后，这里会显示题型判断依据和建议切入点。
+                </p>
               </div>
-
-              <article class="glass-card accent-card">
-                <p class="card-label">Why this category</p>
-                <p id="reason-text"></p>
-              </article>
-
-              <article class="glass-card">
-                <p class="card-label">Guide Summary</p>
-                <p id="guide-summary"></p>
-              </article>
-
-              <div class="dual-grid">
-                <article class="glass-card">
-                  <p class="card-label">Next Steps</p>
-                  <ul id="next-steps"></ul>
-                </article>
-                <article class="glass-card">
-                  <p class="card-label">Method Checklist</p>
-                  <ul id="method-checklist"></ul>
-                </article>
-              </div>
-
-              <div class="dual-grid">
-                <article class="glass-card">
-                  <p class="card-label">Suggested Tools</p>
-                  <ul id="tool-list"></ul>
-                </article>
-                <article class="glass-card">
-                  <p class="card-label">Safety Boundary</p>
-                  <p class="tool-note">
-                    Keep usage inside the provided CTF challenge boundary. The app is designed for lawful training and
-                    guided analysis, not real-world target automation.
-                  </p>
-                </article>
+              <div class="score-card">
+                <span class="score-label" data-i18n="confidenceLabel">置信度</span>
+                <strong id="confidence-value">--</strong>
               </div>
             </div>
           </section>
+
+          <section id="empty-state" class="settings-card empty-card">
+            <div class="empty-illustration"></div>
+            <h3 data-i18n="emptyTitle">还没有分析结果</h3>
+            <p class="muted" data-i18n="emptyCopy">
+              在左侧填写题目信息，应用会返回题型、方法学 checklist 和推荐工具。
+            </p>
+          </section>
+
+          <div id="result-view" class="result-layout hidden">
+            <section class="settings-card">
+              <div class="section-head">
+                <div>
+                  <p class="overline" data-i18n="guideTag">方法摘要</p>
+                  <h3 data-i18n="guideTitle">解题说明</h3>
+                </div>
+              </div>
+              <p id="guide-summary" class="muted"></p>
+            </section>
+
+            <section class="settings-card">
+              <div class="section-head">
+                <div>
+                  <p class="overline" data-i18n="stepsTag">建议步骤</p>
+                  <h3 data-i18n="stepsTitle">下一步</h3>
+                </div>
+              </div>
+              <ul id="next-steps" class="clean-list"></ul>
+            </section>
+
+            <section class="settings-card">
+              <div class="section-head">
+                <div>
+                  <p class="overline" data-i18n="checklistTag">方法学清单</p>
+                  <h3 data-i18n="checklistTitle">检查项</h3>
+                </div>
+              </div>
+              <ul id="method-checklist" class="clean-list"></ul>
+            </section>
+
+            <section class="settings-card">
+              <div class="section-head">
+                <div>
+                  <p class="overline" data-i18n="toolsTag">推荐工具</p>
+                  <h3 data-i18n="toolsTitle">可配合使用</h3>
+                </div>
+              </div>
+              <ul id="tool-list" class="clean-list"></ul>
+            </section>
+
+            <section class="settings-card">
+              <div class="section-head">
+                <div>
+                  <p class="overline" data-i18n="boundaryTag">边界说明</p>
+                  <h3 data-i18n="boundaryTitle">安全限制</h3>
+                </div>
+              </div>
+              <p class="muted" data-i18n="boundaryCopy">
+                本应用面向合法 CTF 训练环境，仅提供题型分类、方法指引和本地分析辅助，不面向真实目标攻击自动化。
+              </p>
+            </section>
+          </div>
         </section>
       </main>
     </div>

@@ -40,6 +40,8 @@ function runBridge(payload) {
     payload.title,
     "--description",
     payload.description,
+    "--lang",
+    payload.lang || "zh-CN",
     "--tags",
     ...payload.tags,
   ];
@@ -108,4 +110,3 @@ app.on("window-all-closed", () => {
     app.quit();
   }
 });
-
