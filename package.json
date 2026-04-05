@@ -1,0 +1,37 @@
+{
+  "name": "ctf-compass-desktop",
+  "version": "0.2.0",
+  "description": "Desktop challenge classification and methodology workbench for lawful CTF analysis.",
+  "main": "desktop/main.js",
+  "author": "OpenAI Codex",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron .",
+    "dist": "electron-builder --win nsis",
+    "dist:dir": "electron-builder --win dir",
+    "dist:zip": "electron-builder --win zip"
+  },
+  "build": {
+    "appId": "com.ctfcompass.desktop",
+    "productName": "CTF Compass",
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "desktop/**/*",
+      "src/**/*",
+      "docs/**/*",
+      "README.md",
+      "pyproject.toml",
+      "package.json"
+    ],
+    "extraMetadata": {
+      "main": "desktop/main.js"
+    }
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^25.1.8"
+  }
+}

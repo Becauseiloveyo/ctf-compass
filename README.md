@@ -1,6 +1,6 @@
 # CTF Compass
 
-CTF Compass is a safe, extensible assistant for lawful CTF practice. It helps users classify challenges, review common solving paths, and launch local analysis helpers for challenge categories such as crypto, web, pwn, reverse, forensic, and misc.
+CTF Compass is a safe, extensible desktop app for lawful CTF practice. It helps users classify challenges, review common solving paths, and launch local analysis helpers for challenge categories such as crypto, web, pwn, reverse, forensic, and misc.
 
 ## Scope
 
@@ -25,19 +25,35 @@ This project does **not** target real-world systems and should not be used for u
 ## Repository Layout
 
 - `src/ctf_compass/`: application package
+- `desktop/`: Electron desktop shell and UI
 - `docs/`: architecture and challenge methodology guides
 - `plugins/`: future plugin definitions for category-specific helpers
 
 ## Quick Start
 
 ```powershell
-python -m ctf_compass.cli analyze --title "RSA warmup" --description "n and e are given, recover the flag" --tags crypto rsa
+$env:PYTHONPATH='src'
+python -m ctf_compass.bridge --title "RSA warmup" --description "n and e are given, recover the flag" --tags crypto rsa
 ```
+
+## Desktop App
+
+```powershell
+npm install
+npm run dev
+```
+
+Create a Windows desktop build:
+
+```powershell
+npm run dist
+```
+
+The packaged installer will be written to `release/`.
 
 ## Next Steps
 
 1. Add richer challenge classifiers.
 2. Add plugin loaders for category modules.
 3. Add local file/binary/pcap ingestion flows.
-4. Add a desktop or web UI for guided solving.
-
+4. Expand the desktop app into a full plugin-driven challenge workbench.
