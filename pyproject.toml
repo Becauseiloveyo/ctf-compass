@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ctf-compass"
+version = "0.1.0"
+description = "A safe challenge-classification and methodology assistant for lawful CTF workflows."
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [
+  { name = "OpenAI Codex" }
+]
+
+[project.scripts]
+ctf-compass = "ctf_compass.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
