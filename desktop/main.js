@@ -1,18 +1,19 @@
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const path = require("path");
-const { spawn } = require("child_process");
+const { analyzeChallenge, prepareArtifactsFromEntries, runArtifactAction } = require("./analyzer");
 
 const isDev = !app.isPackaged;
 
 function createWindow() {
   const mainWindow = new BrowserWindow({
-    width: 1480,
+    width: 1500,
     height: 980,
-    minWidth: 1200,
-    minHeight: 760,
-    backgroundColor: "#07111f",
+    minWidth: 1240,
+    minHeight: 780,
+    backgroundColor: "#f4fbfa",
     title: "CTF Compass",
     autoHideMenuBar: true,
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -20,75 +21,55 @@ function createWindow() {
     },
   });
 
+  mainWindow.once("ready-to-show", () => {
+    mainWindow.show();
+  });
+
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
 }
 
-function resolvePythonCommand() {
-  if (process.platform === "win32") {
-    return ["python", []];
-  }
-  return ["python3", []];
+function buildRunOutputRoot() {
+  return path.join(app.getPath("userData"), "generated", `analysis-${Date.now()}`);
 }
 
-function runBridge(payload) {
-  const [command, prefixArgs] = resolvePythonCommand();
-  const args = [
-    ...prefixArgs,
-    "-m",
-    "ctf_compass.bridge",
-    "--title",
-    payload.title,
-    "--description",
-    payload.description,
-    "--lang",
-    payload.lang || "zh-CN",
-    "--tags",
-    ...payload.tags,
-  ];
-
-  const env = {
-    ...process.env,
-    PYTHONPATH: path.join(app.getAppPath(), "src"),
-  };
-
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: app.getAppPath(),
-      env,
-      windowsHide: true,
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    child.on("error", (error) => {
-      reject(new Error(`Failed to start Python bridge: ${error.message}`));
-    });
-
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(stderr.trim() || `Python bridge exited with code ${code}`));
-        return;
-      }
-
-      try {
-        resolve(JSON.parse(stdout));
-      } catch (error) {
-        reject(new Error(`Invalid bridge JSON: ${error.message}`));
-      }
-    });
+async function selectFiles() {
+  const result = await dialog.showOpenDialog({
+    title: "Select challenge files",
+    properties: ["openFile", "multiSelections"],
   });
+
+  if (result.canceled) {
+    return [];
+  }
+
+  return prepareArtifactsFromEntries(result.filePaths);
 }
 
-ipcMain.handle("analyze-challenge", async (_event, payload) => runBridge(payload));
+async function selectFolder() {
+  const result = await dialog.showOpenDialog({
+    title: "Select challenge folder",
+    properties: ["openDirectory"],
+  });
+
+  if (result.canceled || !result.filePaths.length) {
+    return [];
+  }
+
+  return prepareArtifactsFromEntries(result.filePaths);
+}
+
+ipcMain.handle("pick-files", async () => selectFiles());
+ipcMain.handle("pick-folder", async () => selectFolder());
+ipcMain.handle("prepare-artifacts", async (_event, entryPaths) => prepareArtifactsFromEntries(entryPaths || []));
+ipcMain.handle("analyze-challenge", async (_event, payload) => analyzeChallenge(payload || {}, buildRunOutputRoot()));
+ipcMain.handle("run-artifact-action", async (_event, payload) =>
+  runArtifactAction(payload?.actionId, payload?.filePath, buildRunOutputRoot()),
+);
+ipcMain.handle("reveal-artifact", async (_event, targetPath) => {
+  if (targetPath) {
+    shell.showItemInFolder(targetPath);
+  }
+});
 ipcMain.handle("app-meta", async () => ({
   version: app.getVersion(),
   packaged: app.isPackaged,

@@ -1,265 +1,619 @@
-const form = document.getElementById("analyze-form");
-const titleInput = document.getElementById("title");
-const descriptionInput = document.getElementById("description");
-const tagsInput = document.getElementById("tags");
-const statusLine = document.getElementById("status");
-const emptyState = document.getElementById("empty-state");
-const resultView = document.getElementById("result-view");
-const categoryName = document.getElementById("category-name");
-const confidenceValue = document.getElementById("confidence-value");
-const reasonText = document.getElementById("reason-text");
-const guideSummary = document.getElementById("guide-summary");
-const nextSteps = document.getElementById("next-steps");
-const methodChecklist = document.getElementById("method-checklist");
-const toolList = document.getElementById("tool-list");
-const appMeta = document.getElementById("app-meta");
-const langToggle = document.getElementById("lang-toggle");
-const themeToggle = document.getElementById("theme-toggle");
+const STRINGS = {
+  brandCaption: "\u6311\u6218\u5de5\u4f5c\u53f0",
+  navWorkspace: "\u5de5\u4f5c\u53f0",
+  navArtifacts: "\u9644\u4ef6",
+  navResults: "\u7ed3\u679c",
+  navSettings: "\u8bbe\u7f6e",
+  themeTitle: "\u4e3b\u9898",
+  themeNote: "\u6d45\u8272\u4f18\u5148\uff0c\u4e5f\u53ef\u5207\u6362\u6697\u9ed1",
+  runtimeTitle: "\u5f53\u524d\u73af\u5883",
+  addFilesButton: "\u6dfb\u52a0\u6587\u4ef6",
+  addFolderButton: "\u6dfb\u52a0\u6587\u4ef6\u5939",
+  runAnalysisButton: "\u7acb\u5373\u5206\u6790",
+  quickFilesTitle: "\u6dfb\u52a0\u6587\u4ef6",
+  quickFilesNote: "\u56fe\u50cf\u3001txt\u3001zip\u3001ELF\u3001pcap \u90fd\u53ef\u4ee5\u76f4\u63a5\u62d6\u8fdb\u6765",
+  quickFolderTitle: "\u626b\u63cf\u76ee\u5f55",
+  quickFolderNote: "\u9002\u5408\u6709\u591a\u4e2a\u9644\u4ef6\u6216\u5bfc\u51fa\u6587\u4ef6\u7684\u9898\u76ee",
+  quickPasteTitle: "\u8865\u5145\u7ebf\u7d22",
+  quickPasteNote: "\u628a\u9898\u9762\u3001hint\u3001\u5df2\u6709\u53d1\u73b0\u7c98\u8d34\u8fdb\u6765",
+  quickRunTitle: "\u5f00\u59cb\u5206\u6d41",
+  quickRunNote: "\u5148\u627e flag \u5019\u9009\uff0c\u518d\u7ed9\u9898\u578b\u8def\u5f84\u548c\u5de5\u5177\u5efa\u8bae",
+  workspacePanelKicker: "\u9898\u76ee\u5de5\u4f5c\u53f0",
+  workspacePanelTitle: "\u9898\u9762\u4e0e\u7ebf\u7d22",
+  workspacePanelBadge: "\u79bb\u7ebf\u672c\u5730",
+  fieldTitle: "\u9898\u76ee\u6807\u9898",
+  fieldTags: "\u6807\u7b7e",
+  fieldDescription: "\u9898\u76ee\u63cf\u8ff0",
+  fieldNotes: "\u8865\u5145\u7ebf\u7d22",
+  artifactPanelKicker: "\u9644\u4ef6\u8f93\u5165",
+  artifactPanelTitle: "\u6587\u4ef6\u8d44\u4ea7",
+  dropzoneTitle: "\u62d6\u62fd\u6587\u4ef6\u6216\u70b9\u51fb\u6dfb\u52a0",
+  dropzoneNote: "\u56fe\u7247\u3001\u6587\u672c\u3001\u538b\u7f29\u5305\u3001ELF\u3001pcap/pcapng \u4f1a\u88ab\u4f5c\u4e3a\u4e00\u7b49\u8f93\u5165",
+  discoveryKicker: "\u81ea\u52a8\u53d1\u73b0",
+  discoveryTitle: "\u5f53\u524d\u7ebf\u7d22",
+  needsKicker: "\u9700\u6c42\u62c6\u89e3",
+  needsTitle: "\u4f60\u771f\u6b63\u9700\u8981\u7684\u80fd\u529b",
+  summaryKicker: "\u7ed3\u679c\u6458\u8981",
+  pipelineKicker: "\u81ea\u52a8\u5904\u7406",
+  pipelineTitle: "\u672c\u5730\u9012\u5f52\u94fe\u8def",
+  confidenceLabel: "\u7f6e\u4fe1",
+  flagKicker: "FLAG",
+  flagTitle: "\u5019\u9009\u503c",
+  nextKicker: "\u5206\u6790\u8def\u5f84",
+  nextTitle: "\u4e0b\u4e00\u6b65",
+  findingKicker: "\u9644\u4ef6\u53d1\u73b0",
+  findingTitle: "\u91cd\u70b9\u68c0\u67e5\u9879",
+  toolKicker: "\u5de5\u5177\u94fe",
+  toolTitle: "\u914d\u5408\u4f7f\u7528",
+  settingsKicker: "\u8fd0\u884c\u7b56\u7565",
+  settingsTitle: "\u9879\u76ee\u57fa\u7ebf",
+  settingsThemeTitle: "\u754c\u9762\u98ce\u683c",
+  settingsThemeNote: "\u9ed8\u8ba4\u767d\u8272\u6781\u7b80\u5e03\u5c40\uff0c\u652f\u6301\u6697\u9ed1\u6a21\u5f0f",
+  settingsThemeButton: "\u5207\u6362\u4e3b\u9898",
+  settingsRuntimeTitle: "\u6253\u5305\u73af\u5883",
+  settingsOfflineTitle: "\u79bb\u7ebf\u5206\u53d1",
+  settingsOfflineNote: "\u65b0\u7248\u903b\u8f91\u4e0d\u518d\u4f9d\u8d56\u5916\u90e8 Python\uff0c\u6253\u5305\u540e\u53ef\u76f4\u63a5\u8fd0\u884c",
+  roadmapKicker: "\u5b8c\u5584\u65b9\u5411",
+  roadmapTitle: "\u4e0b\u4e00\u6b65\u5e94\u7ee7\u7eed\u505a",
+  emptyArtifactPreview: "\u8fd8\u6ca1\u6709\u6dfb\u52a0\u9644\u4ef6\u3002",
+  emptyArtifactDetail: "\u6ca1\u6709\u53ef\u5c55\u793a\u7684\u9644\u4ef6\uff0c\u5148\u6dfb\u52a0\u6587\u4ef6\u6216\u6587\u4ef6\u5939\u3002",
+  emptyResultsCategory: "\u7b49\u5f85\u5206\u6790",
+  emptyResultsSummary: "\u8fd9\u91cc\u4f1a\u7ed9\u51fa\u9898\u578b\u5224\u65ad\u3001\u4f9d\u636e\u548c\u9644\u4ef6\u5206\u6d41\u5efa\u8bae\u3002",
+  emptyFlags: "\u6682\u65e0 flag \u5019\u9009\u3002",
+  emptyPipeline: "\u8fd8\u6ca1\u6709\u81ea\u52a8\u751f\u6210\u7684\u884d\u751f\u6587\u4ef6\u3002",
+  statusReady: "\u5148\u6dfb\u52a0\u9898\u76ee\u4fe1\u606f\u6216\u9644\u4ef6\uff0c\u518d\u8fdb\u884c\u5206\u6790\u3002",
+  statusAnalyzing: "\u6b63\u5728\u5206\u6790\u9644\u4ef6\u548c\u9898\u76ee\u7ebf\u7d22...",
+  statusDone: "\u5df2\u5b8c\u6210\u672c\u5730\u5206\u6d41\u4e0e\u5019\u9009\u63d0\u53d6\u3002",
+  statusArtifactAdded: "\u9644\u4ef6\u5df2\u66f4\u65b0\uff0c\u53ef\u4ee5\u91cd\u65b0\u5206\u6790\u3002",
+  statusFocusDescription: "\u8bf7\u76f4\u63a5\u7c98\u8d34\u9898\u9762\u3001hint \u6216\u5f53\u524d\u89c2\u5bdf\u5230\u7684\u53ef\u7591\u70b9\u3002",
+  statusActionRunning: "\u6b63\u5728\u5904\u7406\u53ef\u81ea\u52a8\u6267\u884c\u7684\u7ebf\u7d22...",
+  statusActionDone: "\u5df2\u751f\u6210\u65b0\u7684\u884d\u751f\u6587\u4ef6\uff0c\u5e76\u5df2\u91cd\u65b0\u5206\u6790\u3002",
+  statusErrorPrefix: "\u5206\u6790\u5931\u8d25\uff1a",
+  artifactOpen: "\u6253\u5f00\u4f4d\u7f6e",
+  artifactRemove: "\u79fb\u9664",
+  artifactProcess: "\u81ea\u52a8\u5904\u7406",
+};
 
-const translations = {
-  "zh-CN": {
-    appTag: "桌面解题工作台",
-    appTitle: "CTF Compass",
-    heroTag: "统一分析入口",
-    heroTitle: "像手机设置一样，直接、清晰、好用。",
-    heroCopy: "输入题目标题、描述和标签，应用会给出题型判断、方法指引、工具建议和后续步骤。",
-    inputTag: "题目录入",
-    inputTitle: "新建分析",
-    fieldTitle: "题目标题",
-    fieldDescription: "题目描述",
-    fieldTags: "标签",
-    presetCrypto: "RSA 热身",
-    presetWeb: "Web 会话题",
-    presetReverse: "混淆二进制",
-    analyzeButton: "开始分析",
-    statusReady: "已就绪，将通过本地 Python 分析桥执行分类。",
-    focusTag: "关注题型",
-    focusTitle: "内置方向",
-    focusCrypto: "密码分析",
-    focusWeb: "Web 解题引导",
-    focusReverse: "逆向分析",
-    focusPwn: "内存利用",
-    focusForensic: "取证排查",
-    focusMisc: "杂项归类",
-    summaryTag: "分析摘要",
-    emptyCategory: "等待分析",
-    emptyReason: "运行一次分析后，这里会显示题型判断依据和建议切入点。",
-    confidenceLabel: "置信度",
-    emptyTitle: "还没有分析结果",
-    emptyCopy: "在左侧填写题目信息，应用会返回题型、方法学 checklist 和推荐工具。",
-    guideTag: "方法摘要",
-    guideTitle: "解题说明",
-    stepsTag: "建议步骤",
-    stepsTitle: "下一步",
-    checklistTag: "方法学清单",
-    checklistTitle: "检查项",
-    toolsTag: "推荐工具",
-    toolsTitle: "可配合使用",
-    boundaryTag: "边界说明",
-    boundaryTitle: "安全限制",
-    boundaryCopy: "本应用面向合法 CTF 训练环境，仅提供题型分类、方法指引和本地分析辅助，不面向真实目标攻击自动化。",
-    placeholderTitle: "例如：Ghost Session",
-    placeholderDescription: "粘贴题目说明、附件摘要、已有线索、异常行为。",
-    placeholderTags: "web auth cookie jwt",
-    statusAnalyzing: "正在分析题目...",
-    statusDone: "分析完成：{title}",
-    statusError: "分析失败：{message}",
-    themeLight: "浅色",
-    themeDark: "暗色",
+const VIEW_COPY = {
+  workspace: {
+    kicker: "\u5de5\u4f5c\u53f0",
+    title: "\u4ee5\u9644\u4ef6\u4e3a\u4e2d\u5fc3\u7684 CTF \u5de5\u4f5c\u53f0",
   },
-  en: {
-    appTag: "Desktop Analysis Workspace",
-    appTitle: "CTF Compass",
-    heroTag: "Unified Intake",
-    heroTitle: "Direct, clean, and usable like a phone settings app.",
-    heroCopy: "Enter a challenge title, description, and tags. The app returns category guidance, workflow hints, tools, and next steps.",
-    inputTag: "Challenge Intake",
-    inputTitle: "New Analysis",
-    fieldTitle: "Challenge Title",
-    fieldDescription: "Description",
-    fieldTags: "Tags",
-    presetCrypto: "RSA Warmup",
-    presetWeb: "Web Session",
-    presetReverse: "Obfuscated Binary",
-    analyzeButton: "Run Analysis",
-    statusReady: "Ready. The local Python bridge will classify the challenge.",
-    focusTag: "Focus Areas",
-    focusTitle: "Built-in Categories",
-    focusCrypto: "Cryptanalysis",
-    focusWeb: "Web guidance",
-    focusReverse: "Reverse engineering",
-    focusPwn: "Memory exploitation",
-    focusForensic: "Forensic triage",
-    focusMisc: "Misc classification",
-    summaryTag: "Summary",
-    emptyCategory: "Waiting for analysis",
-    emptyReason: "Run one analysis to see the reasoning and the recommended entry point.",
-    confidenceLabel: "Confidence",
-    emptyTitle: "No result yet",
-    emptyCopy: "Fill in the challenge details on the left. The app will return the category, checklist, and suggested tools.",
-    guideTag: "Guide Summary",
-    guideTitle: "Method Overview",
-    stepsTag: "Suggested Steps",
-    stepsTitle: "Next Actions",
-    checklistTag: "Method Checklist",
-    checklistTitle: "Checklist",
-    toolsTag: "Suggested Tools",
-    toolsTitle: "Recommended Tools",
-    boundaryTag: "Boundary",
-    boundaryTitle: "Safety Limit",
-    boundaryCopy: "This app is for lawful CTF environments only. It provides classification, methodology guidance, and local analysis support, not real-world attack automation.",
-    placeholderTitle: "Example: Ghost Session",
-    placeholderDescription: "Paste the prompt, file summary, observations, and suspicious behavior.",
-    placeholderTags: "web auth cookie jwt",
-    statusAnalyzing: "Analyzing challenge...",
-    statusDone: "Analysis complete: {title}",
-    statusError: "Analysis failed: {message}",
-    themeLight: "Light",
-    themeDark: "Dark",
+  artifacts: {
+    kicker: "\u9644\u4ef6",
+    title: "\u6587\u4ef6\u8d44\u4ea7\u4e0e\u5206\u7c7b\u7ed3\u679c",
+  },
+  results: {
+    kicker: "\u7ed3\u679c",
+    title: "flag \u5019\u9009\u3001\u9898\u578b\u5206\u6d41\u4e0e\u89e3\u9898\u8def\u5f84",
+  },
+  settings: {
+    kicker: "\u8bbe\u7f6e",
+    title: "\u9879\u76ee\u57fa\u7ebf\u4e0e\u6253\u5305\u7b56\u7565",
   },
 };
 
-const presets = {
-  crypto: {
-    title: {
-      "zh-CN": "RSA 热身",
-      en: "RSA Warmup",
-    },
-    description: {
-      "zh-CN": "题目给出了 n、e 和密文。恢复明文并说明漏洞点。",
-      en: "The challenge gives n, e, and a ciphertext. Recover the plaintext and explain the weakness.",
-    },
-    tags: "crypto rsa modulus",
-  },
-  web: {
-    title: {
-      "zh-CN": "Ghost Session",
-      en: "Ghost Session",
-    },
-    description: {
-      "zh-CN": "一个小型站点把管理员判断放在 Cookie 逻辑里。识别可能漏洞类型并梳理路由面。",
-      en: "A small challenge site uses cookies for admin logic. Identify the likely flaw class and map the route surface.",
-    },
-    tags: "web auth cookie session",
-  },
-  reverse: {
-    title: {
-      "zh-CN": "混淆保险箱",
-      en: "Vault Binary",
-    },
-    description: {
-      "zh-CN": "一个 ELF 二进制要求输入密钥。恢复校验流程并找出关键逻辑。",
-      en: "An ELF binary asks for a key. Recover the validation flow and identify the critical logic.",
-    },
-    tags: "reverse binary elf ghidra",
-  },
+const ROADMAP_ITEMS = [
+  "\u8865\u9f50 WAV \u9891\u8c31\u56fe\u3001\u97f3\u9891 chunk \u5f02\u5e38\u68c0\u6d4b\u548c\u83ab\u65af/\u97f3\u8c03\u7c7b\u7ebf\u7d22\u63d0\u53d6\u3002",
+  "\u7ed9\u6bcf\u4e2a\u9644\u4ef6\u589e\u52a0\u8bc1\u636e\u7b14\u8bb0\u4e0e\u5df2\u9a8c\u8bc1\u7ed3\u8bba\uff0c\u628a\u81ea\u52a8\u7ed3\u679c\u548c\u4eba\u5de5\u5224\u65ad\u653e\u5728\u4e00\u8d77\u3002",
+  "\u5bf9 ELF\u3001PE\u3001APK \u52a0\u5165\u66f4\u7ec6\u7684\u7a0b\u5e8f\u7279\u5f81\u62bd\u53d6\uff0c\u8ba9 reverse/pwn \u5206\u6d41\u66f4\u7a33\u5b9a\u3002",
+  "\u4e3a PDF / Office / \u56fe\u50cf / \u6d41\u91cf\u9898\u578b\u62c6\u51fa\u4e13\u9898\u5de5\u4f5c\u9762\u677f\uff0c\u4e0d\u518d\u53ea\u662f\u901a\u7528\u7ed3\u679c\u5361\u7247\u3002",
+  "\u6dfb\u52a0\u6269\u5c55\u5f0f\u5206\u6790\u5668\u4e0e\u53d1\u5e03\u6d41\u7a0b\uff0c\u8ba9\u540e\u7eed\u89c4\u5219\u548c\u6253\u5305\u66f4\u5bb9\u6613\u8fed\u4ee3\u3002",
+];
+
+const state = {
+  activeView: "workspace",
+  theme: localStorage.getItem("ctf-theme") || "light",
+  artifacts: [],
+  analysis: null,
 };
 
-let currentLang = "zh-CN";
-let currentTheme = "light";
+const elements = {
+  body: document.body,
+  navItems: Array.from(document.querySelectorAll(".nav-item")),
+  views: {
+    workspace: document.getElementById("workspace-view"),
+    artifacts: document.getElementById("artifacts-view"),
+    results: document.getElementById("results-view"),
+    settings: document.getElementById("settings-view"),
+  },
+  viewKicker: document.getElementById("view-kicker"),
+  viewTitle: document.getElementById("view-title"),
+  appMeta: document.getElementById("app-meta"),
+  settingsRuntime: document.getElementById("settings-runtime"),
+  themeToggle: document.getElementById("theme-toggle"),
+  settingsThemeToggle: document.getElementById("settings-theme-toggle"),
+  statusBanner: document.getElementById("status-banner"),
+  titleInput: document.getElementById("title-input"),
+  tagsInput: document.getElementById("tags-input"),
+  descriptionInput: document.getElementById("description-input"),
+  notesInput: document.getElementById("notes-input"),
+  pickFilesButton: document.getElementById("pick-files-button"),
+  pickFolderButton: document.getElementById("pick-folder-button"),
+  runAnalysisButton: document.getElementById("run-analysis-button"),
+  quickFilesButton: document.getElementById("quick-files-button"),
+  quickFolderButton: document.getElementById("quick-folder-button"),
+  quickPasteButton: document.getElementById("quick-paste-button"),
+  quickRunButton: document.getElementById("quick-run-button"),
+  artifactDropzone: document.getElementById("artifact-dropzone"),
+  artifactCountPill: document.getElementById("artifact-count-pill"),
+  artifactPreviewList: document.getElementById("artifact-preview-list"),
+  discoveryList: document.getElementById("discovery-list"),
+  needsList: document.getElementById("needs-list"),
+  artifactDetailList: document.getElementById("artifact-detail-list"),
+  summaryCategory: document.getElementById("summary-category"),
+  summaryConfidence: document.getElementById("summary-confidence"),
+  summaryText: document.getElementById("summary-text"),
+  summaryEvidence: document.getElementById("summary-evidence"),
+  pipelineList: document.getElementById("pipeline-list"),
+  flagList: document.getElementById("flag-list"),
+  nextList: document.getElementById("next-list"),
+  findingList: document.getElementById("finding-list"),
+  toolList: document.getElementById("tool-list"),
+  roadmapList: document.getElementById("roadmap-list"),
+};
 
-function t(key) {
-  return translations[currentLang][key] || key;
-}
-
-function setStatus(message, isError = false) {
-  statusLine.textContent = message;
-  statusLine.style.color = isError ? "var(--danger)" : "var(--muted)";
-}
-
-function renderList(target, items) {
-  target.innerHTML = "";
-  items.forEach((item) => {
-    const li = document.createElement("li");
-    li.textContent = item;
-    target.appendChild(li);
+function applyStaticCopy() {
+  document.querySelectorAll("[data-copy]").forEach((node) => {
+    node.textContent = STRINGS[node.dataset.copy] || "";
   });
+
+  elements.titleInput.placeholder = "\u4f8b\u5982\uff1aGhost Session / hidden zip / easy traffic";
+  elements.tagsInput.placeholder = "web auth cookie pcap steg reverse";
+  elements.descriptionInput.placeholder =
+    "\u7c98\u8d34\u9898\u9762\u6216\u9898\u76ee\u7ed9\u51fa\u7684\u76f4\u63a5\u63cf\u8ff0\uff0c\u4e0d\u7528\u8fc7\u5ea6\u7cbe\u7b80\u3002";
+  elements.notesInput.placeholder =
+    "\u8bb0\u4e0b\u4f60\u5df2\u7ecf\u89c2\u5bdf\u5230\u7684\u73b0\u8c61\uff0c\u4f8b\u5982\uff1aPNG \u5c3e\u90e8\u50cf\u662f\u591a\u4e86 ZIP \u5934\uff0cpcap \u91cc\u6709 cookie\u3002";
 }
 
-function applyTranslations() {
-  document.querySelectorAll("[data-i18n]").forEach((node) => {
-    node.textContent = t(node.dataset.i18n);
-  });
-
-  titleInput.placeholder = t("placeholderTitle");
-  descriptionInput.placeholder = t("placeholderDescription");
-  tagsInput.placeholder = t("placeholderTags");
-  langToggle.textContent = currentLang === "zh-CN" ? "EN" : "中文";
-
-  const themeLabels = document.querySelectorAll(".theme-switch-label");
-  themeLabels[0].textContent = t("themeLight");
-  themeLabels[1].textContent = t("themeDark");
-}
-
-async function hydrateMeta() {
-  try {
-    const meta = await window.ctfCompass.getMeta();
-    appMeta.textContent = `${meta.mode} | v${meta.version}`;
-  } catch (_error) {
-    appMeta.textContent = "metadata unavailable";
+function setStatus(message, kind = "info") {
+  elements.statusBanner.textContent = message;
+  elements.statusBanner.classList.remove("is-hidden", "is-error");
+  if (kind === "error") {
+    elements.statusBanner.classList.add("is-error");
   }
 }
 
-function applyPreset(key) {
-  const preset = presets[key];
-  titleInput.value = preset.title[currentLang];
-  descriptionInput.value = preset.description[currentLang];
-  tagsInput.value = preset.tags;
+function renderViewHeader() {
+  const active = VIEW_COPY[state.activeView];
+  elements.viewKicker.textContent = active.kicker;
+  elements.viewTitle.textContent = active.title;
+
+  elements.navItems.forEach((button) => {
+    button.classList.toggle("active", button.dataset.view === state.activeView);
+  });
+
+  Object.entries(elements.views).forEach(([view, node]) => {
+    node.classList.toggle("is-active", view === state.activeView);
+  });
 }
 
-function toggleLanguage() {
-  currentLang = currentLang === "zh-CN" ? "en" : "zh-CN";
-  document.documentElement.lang = currentLang;
-  applyTranslations();
-  setStatus(t("statusReady"));
+function switchView(view) {
+  state.activeView = view;
+  renderViewHeader();
+}
+
+function setTheme(theme) {
+  state.theme = theme;
+  elements.body.dataset.theme = theme;
+  localStorage.setItem("ctf-theme", theme);
 }
 
 function toggleTheme() {
-  currentTheme = currentTheme === "light" ? "dark" : "light";
-  document.body.dataset.theme = currentTheme;
+  setTheme(state.theme === "light" ? "dark" : "light");
 }
 
-document.querySelectorAll(".preset-chip").forEach((button) => {
+function uniqArtifacts(items) {
+  const map = new Map();
+  items.forEach((item) => {
+    map.set(item.path, item);
+  });
+  return Array.from(map.values());
+}
+
+function createArtifactPreviewRow(item) {
+  const row = document.createElement("div");
+  row.className = "artifact-row";
+
+  const meta = document.createElement("div");
+  meta.className = "artifact-meta";
+
+  const badge = document.createElement("span");
+  badge.className = "artifact-badge";
+  badge.textContent = item.badge;
+
+  const textWrap = document.createElement("div");
+  textWrap.className = "artifact-text";
+
+  const title = document.createElement("strong");
+  title.textContent = item.name;
+
+  const subtitle = document.createElement("p");
+  subtitle.textContent = `${item.familyLabel}  |  ${item.sizeLabel}`;
+
+  textWrap.append(title, subtitle);
+  meta.append(badge, textWrap);
+
+  const removeButton = document.createElement("button");
+  removeButton.className = "icon-button";
+  removeButton.type = "button";
+  removeButton.textContent = "X";
+  removeButton.title = STRINGS.artifactRemove;
+  removeButton.addEventListener("click", () => {
+    state.artifacts = state.artifacts.filter((artifact) => artifact.path !== item.path);
+    renderAll();
+  });
+
+  row.append(meta, removeButton);
+  return row;
+}
+
+function renderArtifactPreview() {
+  elements.artifactCountPill.textContent = String(state.artifacts.length);
+  elements.artifactPreviewList.innerHTML = "";
+
+  if (!state.artifacts.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-copy";
+    empty.textContent = STRINGS.emptyArtifactPreview;
+    elements.artifactPreviewList.append(empty);
+    return;
+  }
+
+  state.artifacts.forEach((item) => {
+    elements.artifactPreviewList.append(createArtifactPreviewRow(item));
+  });
+}
+
+function inferPreviewFindings() {
+  if (!state.artifacts.length) {
+    return [STRINGS.statusReady];
+  }
+
+  const familyCount = state.artifacts.reduce((accumulator, item) => {
+    accumulator[item.family] = (accumulator[item.family] || 0) + 1;
+    return accumulator;
+  }, {});
+
+  const findings = [`\u5df2\u52a0\u8f7d ${state.artifacts.length} \u4e2a\u9644\u4ef6\uff0c\u5206\u6790\u65f6\u4f1a\u4f18\u5148\u4ece\u9644\u4ef6\u8bc6\u522b\u9898\u578b\u3002`];
+
+  if (familyCount.image) {
+    findings.push("\u56fe\u50cf\u7c7b\u9644\u4ef6\u5df2\u68c0\u6d4b\u5230\uff0c\u53ef\u80fd\u6d89\u53ca\u9690\u5199\u3001\u5143\u6570\u636e\u6216\u5c3e\u90e8\u9690\u85cf\u3002");
+  }
+  if (familyCount.network) {
+    findings.push("\u6d41\u91cf\u7c7b\u9644\u4ef6\u5df2\u68c0\u6d4b\u5230\uff0c\u53ef\u4ee5\u8fdb\u5165 HTTP / DNS / \u4f1a\u8bdd\u91cd\u7ec4\u5206\u6790\u3002");
+  }
+  if (familyCount.binary) {
+    findings.push("\u4e8c\u8fdb\u5236\u9644\u4ef6\u5df2\u68c0\u6d4b\u5230\uff0c\u7ed3\u679c\u4f1a\u504f\u5411 reverse / pwn \u5206\u6d41\u3002");
+  }
+  if (familyCount.text) {
+    findings.push("\u6587\u672c\u7c7b\u9644\u4ef6\u4f1a\u81ea\u52a8\u626b flag \u6837\u5f0f\u3001base64 \u548c hex \u7ebf\u7d22\u3002");
+  }
+
+  return findings;
+}
+
+function renderDiscoveryPanel() {
+  elements.discoveryList.innerHTML = "";
+  const items = state.analysis
+    ? state.analysis.quickFindings.concat(state.analysis.warnings || [])
+    : inferPreviewFindings();
+
+  items.forEach((item) => {
+    const box = document.createElement("div");
+    box.className = "stack-item";
+    box.textContent = item;
+    elements.discoveryList.append(box);
+  });
+}
+
+function renderNeedsPanel(items) {
+  elements.needsList.innerHTML = "";
+  items.forEach((item) => {
+    const li = document.createElement("li");
+    li.textContent = item;
+    elements.needsList.append(li);
+  });
+}
+
+function renderRoadmap() {
+  elements.roadmapList.innerHTML = "";
+  ROADMAP_ITEMS.forEach((item) => {
+    const li = document.createElement("li");
+    li.textContent = item;
+    elements.roadmapList.append(li);
+  });
+}
+
+function renderResults() {
+  if (!state.analysis) {
+    elements.summaryCategory.textContent = STRINGS.emptyResultsCategory;
+    elements.summaryConfidence.textContent = "--";
+    elements.summaryText.textContent = STRINGS.emptyResultsSummary;
+    elements.summaryEvidence.innerHTML = "";
+    elements.pipelineList.innerHTML = `<p class="empty-copy">${STRINGS.emptyPipeline}</p>`;
+    elements.flagList.innerHTML = `<p class="empty-copy">${STRINGS.emptyFlags}</p>`;
+    elements.nextList.innerHTML = "";
+    elements.findingList.innerHTML = `<p class="empty-copy">${STRINGS.emptyArtifactDetail}</p>`;
+    elements.toolList.innerHTML = "";
+    renderNeedsPanel(ROADMAP_ITEMS);
+    return;
+  }
+
+  const result = state.analysis;
+  elements.summaryCategory.textContent = result.classification.label;
+  elements.summaryConfidence.textContent = result.classification.confidence.toFixed(2);
+  elements.summaryText.textContent = result.classification.reason;
+  elements.summaryEvidence.innerHTML = "";
+  result.classification.evidence.forEach((item) => {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.textContent = item;
+    elements.summaryEvidence.append(chip);
+  });
+
+  elements.pipelineList.innerHTML = "";
+  if (!result.pipelineLog || !result.pipelineLog.length) {
+    const emptyPipeline = document.createElement("p");
+    emptyPipeline.className = "empty-copy";
+    emptyPipeline.textContent = STRINGS.emptyPipeline;
+    elements.pipelineList.append(emptyPipeline);
+  } else {
+    result.pipelineLog.forEach((entry) => {
+      const row = document.createElement("div");
+      row.className = "stack-item";
+      const createdNames = (entry.createdArtifacts || []).map((artifact) => artifact.name).join("  |  ");
+      row.innerHTML = `<strong>${escapeHtml(entry.sourceName)} -> ${escapeHtml(entry.actionLabel)}</strong><p>${escapeHtml(
+        entry.message,
+      )}</p><small>${escapeHtml(createdNames)}</small>`;
+      elements.pipelineList.append(row);
+    });
+  }
+
+  elements.flagList.innerHTML = "";
+  if (!result.flagCandidates.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-copy";
+    empty.textContent = result.emptyFlagMessage;
+    elements.flagList.append(empty);
+  } else {
+    result.flagCandidates.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "stack-item";
+      row.innerHTML = `<strong>${escapeHtml(item.value)}</strong><small>${escapeHtml(item.source)}</small>`;
+      elements.flagList.append(row);
+    });
+  }
+
+  elements.nextList.innerHTML = "";
+  result.classification.nextMoves.forEach((item) => {
+    const li = document.createElement("li");
+    li.textContent = item;
+    elements.nextList.append(li);
+  });
+
+  elements.findingList.innerHTML = "";
+  result.artifacts.forEach((artifact) => {
+    elements.findingList.append(createDetailCard(artifact));
+  });
+
+  elements.toolList.innerHTML = "";
+  result.classification.tools.forEach((tool) => {
+    const chip = document.createElement("span");
+    chip.className = "chip tool-chip";
+    chip.textContent = tool;
+    elements.toolList.append(chip);
+  });
+
+  renderNeedsPanel(result.inferredNeeds);
+}
+
+function createDetailCard(artifact) {
+  const card = document.createElement("article");
+  card.className = "detail-card";
+
+  const parts = [`${artifact.familyLabel}  |  ${artifact.sizeLabel}  |  ${artifact.badge}`];
+  if (artifact.sourceKind === "generated" && artifact.generatedBy) {
+    parts.push(`\u81ea\u52a8\u751f\u6210\uff1a${artifact.generatedBy}`);
+  }
+
+  const head = document.createElement("div");
+  head.className = "detail-head";
+  head.innerHTML = `<div><strong>${escapeHtml(artifact.name)}</strong><p>${escapeHtml(
+    parts.join("  |  "),
+  )}</p></div>`;
+
+  const actions = document.createElement("div");
+  actions.className = "detail-actions";
+
+  const openButton = document.createElement("button");
+  openButton.className = "text-link";
+  openButton.type = "button";
+  openButton.textContent = STRINGS.artifactOpen;
+  openButton.addEventListener("click", () => {
+    window.ctfCompass.revealArtifact(artifact.path);
+  });
+  actions.append(openButton);
+
+  if (artifact.actions && artifact.actions.length) {
+    artifact.actions.forEach((action) => {
+      const actionButton = document.createElement("button");
+      actionButton.className = "text-link";
+      actionButton.type = "button";
+      actionButton.textContent = action.label;
+      actionButton.title = STRINGS.artifactProcess;
+      actionButton.addEventListener("click", () => {
+        runArtifactAction(action.id, artifact.path);
+      });
+      actions.append(actionButton);
+    });
+  }
+
+  head.append(actions);
+  card.append(head);
+
+  if (artifact.summary) {
+    const summary = document.createElement("p");
+    summary.className = "detail-summary";
+    summary.textContent = artifact.summary;
+    card.append(summary);
+  }
+
+  const entries = artifact.highlights && artifact.highlights.length ? artifact.highlights : artifact.suggestions || [];
+  if (entries.length) {
+    const lines = document.createElement("div");
+    lines.className = "detail-bullets";
+    entries.forEach((item) => {
+      const line = document.createElement("div");
+      line.className = "detail-line";
+      line.textContent = item;
+      lines.append(line);
+    });
+    card.append(lines);
+  }
+
+  return card;
+}
+
+async function runArtifactAction(actionId, filePath) {
+  try {
+    setStatus(STRINGS.statusActionRunning);
+    const result = await window.ctfCompass.runArtifactAction({ actionId, filePath });
+    if (result.generatedArtifacts && result.generatedArtifacts.length) {
+      state.artifacts = uniqArtifacts(state.artifacts.concat(result.generatedArtifacts));
+    }
+    await runAnalysis();
+    setStatus(result.message || STRINGS.statusActionDone);
+  } catch (error) {
+    setStatus(`${STRINGS.statusErrorPrefix} ${error.message}`, "error");
+  }
+}
+
+function renderArtifactDetails() {
+  elements.artifactDetailList.innerHTML = "";
+  const source = state.analysis ? state.analysis.artifacts : state.artifacts;
+
+  if (!source.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-copy";
+    empty.textContent = STRINGS.emptyArtifactDetail;
+    elements.artifactDetailList.append(empty);
+    return;
+  }
+
+  source.forEach((artifact) => {
+    elements.artifactDetailList.append(createDetailCard(artifact));
+  });
+}
+
+function renderAll() {
+  renderViewHeader();
+  renderArtifactPreview();
+  renderDiscoveryPanel();
+  renderResults();
+  renderArtifactDetails();
+  renderRoadmap();
+}
+
+function splitTags(value) {
+  return value
+    .split(/\s+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+async function runAnalysis() {
+  try {
+    setStatus(STRINGS.statusAnalyzing);
+    const result = await window.ctfCompass.analyzeChallenge({
+      title: elements.titleInput.value.trim(),
+      description: elements.descriptionInput.value.trim(),
+      notes: elements.notesInput.value.trim(),
+      tags: splitTags(elements.tagsInput.value),
+      artifacts: state.artifacts.map((item) => item.path),
+    });
+    state.analysis = result;
+    renderAll();
+    switchView("results");
+    setStatus(STRINGS.statusDone);
+  } catch (error) {
+    setStatus(`${STRINGS.statusErrorPrefix} ${error.message}`, "error");
+  }
+}
+
+async function appendPreparedArtifacts(promise) {
+  try {
+    const items = await promise;
+    if (items.length) {
+      state.artifacts = uniqArtifacts(state.artifacts.concat(items));
+      renderAll();
+      setStatus(STRINGS.statusArtifactAdded);
+    }
+  } catch (error) {
+    setStatus(`${STRINGS.statusErrorPrefix} ${error.message}`, "error");
+  }
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+async function hydrateMeta() {
+  const meta = await window.ctfCompass.getMeta();
+  const text = `${meta.mode}  |  v${meta.version}`;
+  elements.appMeta.textContent = text;
+  elements.settingsRuntime.textContent = text;
+}
+
+elements.navItems.forEach((button) => {
   button.addEventListener("click", () => {
-    applyPreset(button.dataset.preset);
+    switchView(button.dataset.view);
   });
 });
 
-langToggle.addEventListener("click", toggleLanguage);
-themeToggle.addEventListener("click", toggleTheme);
+elements.themeToggle.addEventListener("click", toggleTheme);
+elements.settingsThemeToggle.addEventListener("click", toggleTheme);
+elements.pickFilesButton.addEventListener("click", () => appendPreparedArtifacts(window.ctfCompass.pickFiles()));
+elements.pickFolderButton.addEventListener("click", () => appendPreparedArtifacts(window.ctfCompass.pickFolder()));
+elements.quickFilesButton.addEventListener("click", () => appendPreparedArtifacts(window.ctfCompass.pickFiles()));
+elements.quickFolderButton.addEventListener("click", () => appendPreparedArtifacts(window.ctfCompass.pickFolder()));
+elements.quickPasteButton.addEventListener("click", () => {
+  elements.descriptionInput.focus();
+  setStatus(STRINGS.statusFocusDescription);
+});
+elements.runAnalysisButton.addEventListener("click", runAnalysis);
+elements.quickRunButton.addEventListener("click", runAnalysis);
+elements.artifactDropzone.addEventListener("click", () => appendPreparedArtifacts(window.ctfCompass.pickFiles()));
 
-form.addEventListener("submit", async (event) => {
+elements.artifactDropzone.addEventListener("dragover", (event) => {
   event.preventDefault();
-  setStatus(t("statusAnalyzing"));
+  elements.artifactDropzone.classList.add("is-dragover");
+});
 
-  const payload = {
-    title: titleInput.value.trim(),
-    description: descriptionInput.value.trim(),
-    lang: currentLang,
-    tags: tagsInput.value
-      .split(/\s+/)
-      .map((tag) => tag.trim())
-      .filter(Boolean),
-  };
+elements.artifactDropzone.addEventListener("dragleave", () => {
+  elements.artifactDropzone.classList.remove("is-dragover");
+});
 
-  try {
-    const result = await window.ctfCompass.analyzeChallenge(payload);
-    emptyState.classList.add("hidden");
-    resultView.classList.remove("hidden");
-
-    categoryName.textContent = result.guide.label;
-    confidenceValue.textContent = result.classification.confidence.toFixed(2);
-    reasonText.textContent = result.classification.reason;
-    guideSummary.textContent = result.guide.summary;
-    renderList(nextSteps, result.classification.nextSteps);
-    renderList(methodChecklist, result.guide.checklist);
-    renderList(toolList, result.guide.tools);
-    setStatus(t("statusDone").replace("{title}", result.challenge.title));
-  } catch (error) {
-    setStatus(t("statusError").replace("{message}", error.message || "unknown error"), true);
+elements.artifactDropzone.addEventListener("drop", (event) => {
+  event.preventDefault();
+  elements.artifactDropzone.classList.remove("is-dragover");
+  const paths = Array.from(event.dataTransfer.files || [])
+    .map((file) => file.path)
+    .filter(Boolean);
+  if (paths.length) {
+    appendPreparedArtifacts(window.ctfCompass.prepareArtifacts(paths));
   }
 });
 
-applyTranslations();
-setStatus(t("statusReady"));
-hydrateMeta();
+setTheme(state.theme);
+applyStaticCopy();
+renderAll();
+setStatus(STRINGS.statusReady);
+hydrateMeta().catch((error) => {
+  setStatus(`${STRINGS.statusErrorPrefix} ${error.message}`, "error");
+});

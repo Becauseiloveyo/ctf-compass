@@ -1,26 +1,33 @@
 # CTF Compass
 
-CTF Compass is a safe, extensible desktop app for lawful CTF practice. It helps users classify challenges, review common solving paths, and launch local analysis helpers for challenge categories such as crypto, web, pwn, reverse, forensic, and misc.
+CTF Compass is a safe, extensible desktop app for lawful CTF practice. It is now designed around a file-first workflow: challenge statements, images, text files, archives, binaries, and traffic captures are treated as first-class inputs instead of optional notes.
 
 ## Scope
 
 This project is intentionally limited to legitimate CTF training workflows:
 
-- classify challenge types from metadata and notes
+- classify challenge types from metadata, notes, and attached artifacts
+- extract likely flag candidates from text, ASCII / UTF-16 strings, and recursive encoded content
+- automatically unpack ZIP and GZIP content and continue recursive analysis
+- automatically decode base64, hex, base32, ascii85, URL-encoded, single-byte XOR, and compressed text layers when they produce useful local results
+- automatically extract solvable image clues such as appended payloads, PNG text chunks, low-bit-plane candidates, and JPEG COM / XMP / APP segment payloads
+- automatically decode QR and 1D barcode payloads from local images and export RGB / luminance / edge / JPEG-block visualization views for image-based challenges
+- automatically summarize local traffic captures, extracting HTTP requests, DNS names, TLS SNI, cookies/tokens, and exported HTTP objects
+- automatically extract PDF metadata, XMP packets, readable Flate streams, and OOXML/Office package contents for recursive local analysis
+- automatically inspect WAV metadata, PCM LSB candidates, and waveform views for audio-based local challenges
 - surface solving checklists and methodology guides
-- provide local plugin hooks for challenge-specific analysis
-- help organize evidence, observations, and likely next steps
+- help organize evidence, observations, and likely next steps in one desktop workspace
 
 This project does **not** target real-world systems and should not be used for unauthorized activity.
 
-## Planned Capability Areas
+## Current Capability Areas
 
-- `crypto`: encoding detection, cipher family hints, known workflow checklists
-- `web`: structured methodology guidance, route discovery notes, auth/session debugging hints, common vulnerability test checklists for CTF labs
-- `reverse`: binary triage notes, strings/imports/function map workflow
-- `pwn`: binary hardening checklist, libc/ELF metadata, exploit-planning notes for sandboxed challenge binaries
-- `forensic`: file metadata, archive carving workflow, timeline hints
-- `misc`: stego, encoding, logic puzzle triage
+- `crypto`: simple encoded content discovery, category hints, and workflow guidance
+- `web`: challenge metadata and traffic-based session/auth clue routing
+- `reverse`: binary strings/import-oriented triage and flow hints
+- `pwn`: binary-family routing with protection-oriented next steps
+- `forensic`: pcap/pcapng session extraction, archive recursion, document extraction, and hidden-artifact oriented workflow hints
+- `misc`: image/stego and mixed-artifact triage with local auto-processing where deterministic
 
 ## Repository Layout
 
@@ -28,13 +35,6 @@ This project does **not** target real-world systems and should not be used for u
 - `desktop/`: Electron desktop shell and UI
 - `docs/`: architecture and challenge methodology guides
 - `plugins/`: future plugin definitions for category-specific helpers
-
-## Quick Start
-
-```powershell
-$env:PYTHONPATH='src'
-python -m ctf_compass.bridge --title "RSA warmup" --description "n and e are given, recover the flag" --tags crypto rsa
-```
 
 ## Desktop App
 
@@ -46,14 +46,16 @@ npm run dev
 Create a Windows desktop build:
 
 ```powershell
-npm run dist
+npm run dist:dir
 ```
 
-The packaged installer will be written to `release/`.
+The unpacked Windows app will be written to `release/win-unpacked/`.
+
+A downloadable zip can be created from the unpacked build. The current local package name is `release/CTF-Compass-0.3.7-win-x64.zip`.
 
 ## Next Steps
 
-1. Add richer challenge classifiers.
-2. Add plugin loaders for category modules.
-3. Add local file/binary/pcap ingestion flows.
-4. Expand the desktop app into a full plugin-driven challenge workbench.
+1. Add deeper audio analyzers such as spectrogram views, tone/morse detection, and chunk anomaly summaries.
+2. Add an evidence notebook so each artifact can store analyst comments and confirmed findings.
+3. Add deeper executable analyzers for ELF/PE/APK to strengthen reverse and pwn routing.
+4. Add category-specific plugin modules and release automation for GitHub Releases / installers.

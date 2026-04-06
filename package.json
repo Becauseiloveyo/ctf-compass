@@ -1,6 +1,6 @@
 {
   "name": "ctf-compass-desktop",
-  "version": "0.2.0",
+  "version": "0.3.7",
   "description": "Desktop challenge classification and methodology workbench for lawful CTF analysis.",
   "main": "desktop/main.js",
   "author": "OpenAI Codex",
@@ -14,24 +14,36 @@
   "build": {
     "appId": "com.ctfcompass.desktop",
     "productName": "CTF Compass",
-    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "artifactName": "CTF-Compass-${version}-win-${arch}.${ext}",
     "directories": {
       "output": "release"
     },
     "files": [
       "desktop/**/*",
-      "src/**/*",
       "docs/**/*",
       "README.md",
-      "pyproject.toml",
       "package.json"
     ],
+    "win": {
+      "signAndEditExecutable": false,
+      "verifyUpdateCodeSignature": false
+    },
     "extraMetadata": {
       "main": "desktop/main.js"
     }
   },
   "devDependencies": {
+    "bwip-js": "^4.9.0",
     "electron": "^37.2.0",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "qrcode": "^1.5.4"
+  },
+  "dependencies": {
+    "@ericblade/quagga2": "^1.12.1",
+    "adm-zip": "^0.5.17",
+    "exif-parser": "^0.1.12",
+    "jpeg-js": "^0.4.4",
+    "jsqr": "^1.4.0",
+    "pngjs": "^7.0.0"
   }
 }

@@ -7,184 +7,297 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body data-theme="light">
-    <div class="app-shell">
-      <header class="topbar">
-        <div class="brand-row">
-          <div class="brand-icon">CC</div>
-          <div>
-            <p class="overline" data-i18n="appTag">桌面解题工作台</p>
-            <h1 data-i18n="appTitle">CTF Compass</h1>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">CC</div>
+          <div class="brand-copy">
+            <p class="brand-caption" data-copy="brandCaption"></p>
+            <h1>CTF Compass</h1>
           </div>
         </div>
 
-        <div class="toolbar">
-          <button id="lang-toggle" class="text-button" type="button">EN</button>
-          <button id="theme-toggle" class="theme-switch" type="button" aria-label="切换主题">
-            <span class="theme-switch-track">
-              <span class="theme-switch-label">浅色</span>
-              <span class="theme-switch-thumb"></span>
-              <span class="theme-switch-label">暗色</span>
-            </span>
+        <nav class="nav">
+          <button class="nav-item active" type="button" data-view="workspace">
+            <span class="nav-icon">W</span>
+            <span data-copy="navWorkspace"></span>
           </button>
-        </div>
-      </header>
+          <button class="nav-item" type="button" data-view="artifacts">
+            <span class="nav-icon">A</span>
+            <span data-copy="navArtifacts"></span>
+          </button>
+          <button class="nav-item" type="button" data-view="results">
+            <span class="nav-icon">R</span>
+            <span data-copy="navResults"></span>
+          </button>
+          <button class="nav-item" type="button" data-view="settings">
+            <span class="nav-icon">S</span>
+            <span data-copy="navSettings"></span>
+          </button>
+        </nav>
 
-      <main class="content-grid">
-        <aside class="settings-pane">
-          <section class="settings-card hero-card">
-            <p class="overline" data-i18n="heroTag">统一分析入口</p>
-            <h2 data-i18n="heroTitle">像手机设置一样，直接、清晰、好用。</h2>
-            <p class="muted" data-i18n="heroCopy">
-              输入题目标题、描述和标签，应用会给出题型判断、方法指引、工具建议和后续步骤。
-            </p>
-          </section>
-
-          <section class="settings-card">
-            <div class="section-head">
-              <div>
-                <p class="overline" data-i18n="inputTag">题目录入</p>
-                <h3 data-i18n="inputTitle">新建分析</h3>
-              </div>
-              <span id="app-meta" class="chip">加载中...</span>
+        <div class="sidebar-footer">
+          <div class="sidebar-row">
+            <div>
+              <p class="sidebar-label" data-copy="themeTitle"></p>
+              <p class="sidebar-note" data-copy="themeNote"></p>
             </div>
+            <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle theme">
+              <span class="theme-track">
+                <span class="theme-thumb"></span>
+              </span>
+            </button>
+          </div>
 
-            <form id="analyze-form" class="settings-form">
-              <label class="field">
-                <span data-i18n="fieldTitle">题目标题</span>
-                <input id="title" name="title" placeholder="例如：Ghost Session" required />
-              </label>
+          <div class="sidebar-row meta-row">
+            <div>
+              <p class="sidebar-label" data-copy="runtimeTitle"></p>
+              <p class="sidebar-note" id="app-meta">...</p>
+            </div>
+          </div>
+        </div>
+      </aside>
 
-              <label class="field">
-                <span data-i18n="fieldDescription">题目描述</span>
-                <textarea
-                  id="description"
-                  name="description"
-                  rows="6"
-                  placeholder="粘贴题目说明、附件摘要、已有线索、异常行为。"
-                ></textarea>
-              </label>
+      <main class="main">
+        <header class="header">
+          <div>
+            <p class="header-kicker" id="view-kicker"></p>
+            <h2 class="header-title" id="view-title"></h2>
+          </div>
+          <div class="header-actions">
+            <button id="pick-files-button" class="secondary-button" type="button" data-copy="addFilesButton"></button>
+            <button id="pick-folder-button" class="secondary-button" type="button" data-copy="addFolderButton"></button>
+            <button id="run-analysis-button" class="primary-button" type="button" data-copy="runAnalysisButton"></button>
+          </div>
+        </header>
 
-              <label class="field">
-                <span data-i18n="fieldTags">标签</span>
-                <input id="tags" name="tags" placeholder="web auth cookie jwt" />
-              </label>
+        <div id="status-banner" class="status-banner is-hidden"></div>
 
-              <div class="preset-group">
-                <button class="preset-chip" type="button" data-preset="crypto" data-i18n="presetCrypto">
-                  RSA 热身
-                </button>
-                <button class="preset-chip" type="button" data-preset="web" data-i18n="presetWeb">
-                  Web 会话题
-                </button>
-                <button class="preset-chip" type="button" data-preset="reverse" data-i18n="presetReverse">
-                  混淆二进制
-                </button>
+        <section id="workspace-view" class="view is-active">
+          <div class="action-grid">
+            <button id="quick-files-button" class="action-card" type="button">
+              <span class="action-icon">FILE</span>
+              <span class="action-copy">
+                <strong data-copy="quickFilesTitle"></strong>
+                <small data-copy="quickFilesNote"></small>
+              </span>
+            </button>
+            <button id="quick-folder-button" class="action-card" type="button">
+              <span class="action-icon">DIR</span>
+              <span class="action-copy">
+                <strong data-copy="quickFolderTitle"></strong>
+                <small data-copy="quickFolderNote"></small>
+              </span>
+            </button>
+            <button id="quick-paste-button" class="action-card" type="button">
+              <span class="action-icon">TEXT</span>
+              <span class="action-copy">
+                <strong data-copy="quickPasteTitle"></strong>
+                <small data-copy="quickPasteNote"></small>
+              </span>
+            </button>
+            <button id="quick-run-button" class="action-card accent-card" type="button">
+              <span class="action-icon">RUN</span>
+              <span class="action-copy">
+                <strong data-copy="quickRunTitle"></strong>
+                <small data-copy="quickRunNote"></small>
+              </span>
+            </button>
+          </div>
+
+          <div class="content-grid two-column">
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <p class="panel-kicker" data-copy="workspacePanelKicker"></p>
+                  <h3 class="panel-title" data-copy="workspacePanelTitle"></h3>
+                </div>
+                <span class="pill" data-copy="workspacePanelBadge"></span>
               </div>
 
-              <button id="analyze-button" class="primary-button" type="submit" data-i18n="analyzeButton">
-                开始分析
+              <div class="form-grid">
+                <label class="field">
+                  <span data-copy="fieldTitle"></span>
+                  <input id="title-input" type="text" />
+                </label>
+
+                <label class="field">
+                  <span data-copy="fieldTags"></span>
+                  <input id="tags-input" type="text" />
+                </label>
+
+                <label class="field field-full">
+                  <span data-copy="fieldDescription"></span>
+                  <textarea id="description-input" rows="6"></textarea>
+                </label>
+
+                <label class="field field-full">
+                  <span data-copy="fieldNotes"></span>
+                  <textarea id="notes-input" rows="5"></textarea>
+                </label>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <p class="panel-kicker" data-copy="artifactPanelKicker"></p>
+                  <h3 class="panel-title" data-copy="artifactPanelTitle"></h3>
+                </div>
+                <span class="pill" id="artifact-count-pill">0</span>
+              </div>
+
+              <button id="artifact-dropzone" class="dropzone" type="button">
+                <span class="dropzone-title" data-copy="dropzoneTitle"></span>
+                <span class="dropzone-note" data-copy="dropzoneNote"></span>
               </button>
 
-              <p id="status" class="status-text" data-i18n="statusReady">
-                已就绪，将通过本地 Python 分析桥执行分类。
-              </p>
-            </form>
-          </section>
+              <div id="artifact-preview-list" class="artifact-preview-list"></div>
+            </section>
+          </div>
 
-          <section class="settings-card compact-card">
-            <div class="section-head">
-              <div>
-                <p class="overline" data-i18n="focusTag">关注题型</p>
-                <h3 data-i18n="focusTitle">内置方向</h3>
-              </div>
-            </div>
-            <div class="list-stack">
-              <div class="mini-row"><span>Crypto</span><span class="mini-note" data-i18n="focusCrypto">密码分析</span></div>
-              <div class="mini-row"><span>Web</span><span class="mini-note" data-i18n="focusWeb">Web 解题引导</span></div>
-              <div class="mini-row"><span>Reverse</span><span class="mini-note" data-i18n="focusReverse">逆向分析</span></div>
-              <div class="mini-row"><span>Pwn</span><span class="mini-note" data-i18n="focusPwn">内存利用</span></div>
-              <div class="mini-row"><span>Forensic</span><span class="mini-note" data-i18n="focusForensic">取证排查</span></div>
-              <div class="mini-row"><span>Misc</span><span class="mini-note" data-i18n="focusMisc">杂项归类</span></div>
-            </div>
-          </section>
-        </aside>
-
-        <section class="results-pane">
-          <section class="settings-card summary-card">
-            <div class="summary-main">
-              <div>
-                <p class="overline" data-i18n="summaryTag">分析摘要</p>
-                <h2 id="category-name" data-i18n="emptyCategory">等待分析</h2>
-                <p id="reason-text" class="muted" data-i18n="emptyReason">
-                  运行一次分析后，这里会显示题型判断依据和建议切入点。
-                </p>
-              </div>
-              <div class="score-card">
-                <span class="score-label" data-i18n="confidenceLabel">置信度</span>
-                <strong id="confidence-value">--</strong>
-              </div>
-            </div>
-          </section>
-
-          <section id="empty-state" class="settings-card empty-card">
-            <div class="empty-illustration"></div>
-            <h3 data-i18n="emptyTitle">还没有分析结果</h3>
-            <p class="muted" data-i18n="emptyCopy">
-              在左侧填写题目信息，应用会返回题型、方法学 checklist 和推荐工具。
-            </p>
-          </section>
-
-          <div id="result-view" class="result-layout hidden">
-            <section class="settings-card">
-              <div class="section-head">
+          <div class="content-grid two-column">
+            <section class="panel">
+              <div class="panel-head">
                 <div>
-                  <p class="overline" data-i18n="guideTag">方法摘要</p>
-                  <h3 data-i18n="guideTitle">解题说明</h3>
+                  <p class="panel-kicker" data-copy="discoveryKicker"></p>
+                  <h3 class="panel-title" data-copy="discoveryTitle"></h3>
                 </div>
               </div>
-              <p id="guide-summary" class="muted"></p>
+              <div id="discovery-list" class="stack-list"></div>
             </section>
 
-            <section class="settings-card">
-              <div class="section-head">
+            <section class="panel">
+              <div class="panel-head">
                 <div>
-                  <p class="overline" data-i18n="stepsTag">建议步骤</p>
-                  <h3 data-i18n="stepsTitle">下一步</h3>
+                  <p class="panel-kicker" data-copy="needsKicker"></p>
+                  <h3 class="panel-title" data-copy="needsTitle"></h3>
                 </div>
               </div>
-              <ul id="next-steps" class="clean-list"></ul>
+              <ul id="needs-list" class="plain-list"></ul>
+            </section>
+          </div>
+        </section>
+
+        <section id="artifacts-view" class="view">
+          <div id="artifact-detail-list" class="detail-list"></div>
+        </section>
+
+        <section id="results-view" class="view">
+          <div class="content-grid hero-grid">
+            <section class="panel summary-panel">
+              <div class="panel-head">
+                <div>
+                  <p class="panel-kicker" data-copy="summaryKicker"></p>
+                  <h3 class="panel-title" id="summary-category"></h3>
+                </div>
+                <div class="score-pill">
+                  <span data-copy="confidenceLabel"></span>
+                  <strong id="summary-confidence">--</strong>
+                </div>
+              </div>
+              <p id="summary-text" class="body-copy"></p>
+              <div id="summary-evidence" class="chip-row"></div>
+            </section>
+          </div>
+
+          <div class="content-grid hero-grid">
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <p class="panel-kicker" data-copy="pipelineKicker"></p>
+                  <h3 class="panel-title" data-copy="pipelineTitle"></h3>
+                </div>
+              </div>
+              <div id="pipeline-list" class="stack-list"></div>
+            </section>
+          </div>
+
+          <div class="content-grid two-column">
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <p class="panel-kicker" data-copy="flagKicker"></p>
+                  <h3 class="panel-title" data-copy="flagTitle"></h3>
+                </div>
+              </div>
+              <div id="flag-list" class="stack-list"></div>
             </section>
 
-            <section class="settings-card">
-              <div class="section-head">
+            <section class="panel">
+              <div class="panel-head">
                 <div>
-                  <p class="overline" data-i18n="checklistTag">方法学清单</p>
-                  <h3 data-i18n="checklistTitle">检查项</h3>
+                  <p class="panel-kicker" data-copy="nextKicker"></p>
+                  <h3 class="panel-title" data-copy="nextTitle"></h3>
                 </div>
               </div>
-              <ul id="method-checklist" class="clean-list"></ul>
+              <ul id="next-list" class="plain-list"></ul>
+            </section>
+          </div>
+
+          <div class="content-grid two-column">
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <p class="panel-kicker" data-copy="findingKicker"></p>
+                  <h3 class="panel-title" data-copy="findingTitle"></h3>
+                </div>
+              </div>
+              <div id="finding-list" class="detail-list compact-list"></div>
             </section>
 
-            <section class="settings-card">
-              <div class="section-head">
+            <section class="panel">
+              <div class="panel-head">
                 <div>
-                  <p class="overline" data-i18n="toolsTag">推荐工具</p>
-                  <h3 data-i18n="toolsTitle">可配合使用</h3>
+                  <p class="panel-kicker" data-copy="toolKicker"></p>
+                  <h3 class="panel-title" data-copy="toolTitle"></h3>
                 </div>
               </div>
-              <ul id="tool-list" class="clean-list"></ul>
+              <div id="tool-list" class="chip-row"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="settings-view" class="view">
+          <div class="content-grid two-column">
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <p class="panel-kicker" data-copy="settingsKicker"></p>
+                  <h3 class="panel-title" data-copy="settingsTitle"></h3>
+                </div>
+              </div>
+              <div class="settings-list">
+                <div class="settings-row">
+                  <div>
+                    <strong data-copy="settingsThemeTitle"></strong>
+                    <p data-copy="settingsThemeNote"></p>
+                  </div>
+                  <button id="settings-theme-toggle" class="secondary-button" type="button" data-copy="settingsThemeButton"></button>
+                </div>
+                <div class="settings-row">
+                  <div>
+                    <strong data-copy="settingsRuntimeTitle"></strong>
+                    <p id="settings-runtime"></p>
+                  </div>
+                </div>
+                <div class="settings-row">
+                  <div>
+                    <strong data-copy="settingsOfflineTitle"></strong>
+                    <p data-copy="settingsOfflineNote"></p>
+                  </div>
+                </div>
+              </div>
             </section>
 
-            <section class="settings-card">
-              <div class="section-head">
+            <section class="panel">
+              <div class="panel-head">
                 <div>
-                  <p class="overline" data-i18n="boundaryTag">边界说明</p>
-                  <h3 data-i18n="boundaryTitle">安全限制</h3>
+                  <p class="panel-kicker" data-copy="roadmapKicker"></p>
+                  <h3 class="panel-title" data-copy="roadmapTitle"></h3>
                 </div>
               </div>
-              <p class="muted" data-i18n="boundaryCopy">
-                本应用面向合法 CTF 训练环境，仅提供题型分类、方法指引和本地分析辅助，不面向真实目标攻击自动化。
-              </p>
+              <ul id="roadmap-list" class="plain-list"></ul>
             </section>
           </div>
         </section>
