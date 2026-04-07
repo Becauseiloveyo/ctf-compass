@@ -15,6 +15,8 @@ This project is intentionally limited to legitimate CTF training workflows:
 - automatically summarize local traffic captures, extracting HTTP requests, DNS names, TLS SNI, cookies/tokens, and exported HTTP objects
 - automatically extract PDF metadata, XMP packets, readable Flate streams, and OOXML/Office package contents for recursive local analysis
 - automatically inspect WAV metadata, PCM LSB candidates, and waveform views for audio-based local challenges
+- automatically persist the current workspace locally, restoring challenge fields, artifact paths, final flag selection, and evidence notes on the next launch
+- export Markdown investigation reports that include classification, pipeline output, final flag, and artifact-level notebook entries
 - surface solving checklists and methodology guides
 - help organize evidence, observations, and likely next steps in one desktop workspace
 
@@ -51,11 +53,11 @@ npm run dist:dir
 
 The unpacked Windows app will be written to `release/win-unpacked/`.
 
-A downloadable zip can be created from the unpacked build. The current local package name is `release/CTF-Compass-0.3.7-win-x64.zip`.
+A downloadable zip can be created from the unpacked build. The current local package name is `release/CTF-Compass-0.3.8-win-x64.zip`.
 
 ## Next Steps
 
 1. Add deeper audio analyzers such as spectrogram views, tone/morse detection, and chunk anomaly summaries.
-2. Add an evidence notebook so each artifact can store analyst comments and confirmed findings.
-3. Add deeper executable analyzers for ELF/PE/APK to strengthen reverse and pwn routing.
+2. Add deeper executable analyzers for ELF/PE/APK to strengthen reverse and pwn routing.
+3. Split PDF / Office / image / traffic into dedicated work panes instead of a shared generic evidence list.
 4. Add category-specific plugin modules and release automation for GitHub Releases / installers.
