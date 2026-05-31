@@ -943,6 +943,152 @@ body[data-theme="dark"] .settings-row {
   min-height: 238px;
 }
 
+.workbench-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.workbench-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.workbench-tab {
+  min-height: 52px;
+  padding: 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+body[data-theme="dark"] .workbench-tab {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.workbench-tab strong {
+  font-size: 14px;
+}
+
+.workbench-tab span {
+  min-width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--accent-strong);
+  font-size: 12px;
+}
+
+.workbench-tab.active {
+  border-color: rgba(17, 127, 117, 0.2);
+  background: linear-gradient(180deg, rgba(17, 127, 117, 0.12), rgba(255, 255, 255, 0.24));
+  color: var(--accent-strong);
+}
+
+.workbench-shell {
+  display: grid;
+  gap: 18px;
+}
+
+.workbench-hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 20px;
+  border-radius: 24px;
+  border: 1px solid var(--line);
+  background:
+    radial-gradient(circle at top right, rgba(17, 127, 117, 0.12), transparent 46%),
+    var(--surface-soft);
+}
+
+.workbench-copy {
+  min-width: 0;
+}
+
+.workbench-copy h4 {
+  margin: 0 0 8px;
+  font-family: var(--heading-font);
+  font-size: 26px;
+  line-height: 1.06;
+  letter-spacing: -0.04em;
+}
+
+.workbench-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(108px, 1fr));
+  gap: 10px;
+}
+
+.metric-pill {
+  min-width: 0;
+  padding: 14px 16px;
+  display: grid;
+  gap: 4px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-sm);
+}
+
+body[data-theme="dark"] .metric-pill {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.metric-pill strong {
+  font-family: var(--heading-font);
+  font-size: 28px;
+  line-height: 1;
+  letter-spacing: -0.05em;
+  color: var(--accent-strong);
+}
+
+.metric-pill span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workbench-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.9fr);
+  gap: 18px;
+}
+
+.workbench-column {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.workbench-subpanel {
+  padding: 18px;
+  border-radius: 24px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.4);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.46);
+}
+
+body[data-theme="dark"] .workbench-subpanel {
+  background: rgba(255, 255, 255, 0.03);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+
+.compact-head {
+  margin-bottom: 12px;
+}
+
+.compact-head .panel-kicker {
+  margin-bottom: 0;
+}
+
 .pipeline-panel {
   min-height: 238px;
 }
@@ -975,6 +1121,35 @@ body[data-theme="dark"] .settings-row {
 
 .tool-chip {
   color: var(--accent-strong);
+}
+
+.tool-chip.installed {
+  background: var(--accent-soft);
+  border-color: rgba(17, 127, 117, 0.18);
+  color: var(--accent-strong);
+}
+
+.tool-chip.missing {
+  background: rgba(244, 154, 59, 0.08);
+  border-color: rgba(244, 154, 59, 0.22);
+  color: #9a5d12;
+}
+
+body[data-theme="dark"] .tool-chip.missing {
+  color: #f2ba66;
+}
+
+.artifact-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.artifact-tools small {
+  color: var(--muted);
+  line-height: 1.5;
 }
 
 .plain-list {
@@ -1109,6 +1284,10 @@ body[data-theme="dark"] .settings-row {
       "needs";
   }
 
+  .workbench-body {
+    grid-template-columns: 1fr;
+  }
+
   .panel-stage {
     min-height: auto;
   }
@@ -1136,6 +1315,14 @@ body[data-theme="dark"] .settings-row {
   .detail-head,
   .settings-row {
     flex-direction: column;
+  }
+
+  .workbench-hero {
+    flex-direction: column;
+  }
+
+  .workbench-metrics {
+    grid-template-columns: 1fr;
   }
 
   .header-actions,

@@ -35,8 +35,23 @@ const STRINGS = {
   needsKicker: "\u9700\u6c42\u62c6\u89e3",
   needsTitle: "\u4f60\u771f\u6b63\u9700\u8981\u7684\u80fd\u529b",
   summaryKicker: "\u7ed3\u679c\u6458\u8981",
+  workbenchKicker: "\u4e13\u9898\u9762\u677f",
+  workbenchTitle: "\u6309\u9644\u4ef6\u65cf\u7fa4\u62c6\u5f00\u7684\u5de5\u4f5c\u53f0",
   pipelineKicker: "\u81ea\u52a8\u5904\u7406",
   pipelineTitle: "\u672c\u5730\u9012\u5f52\u94fe\u8def",
+  workbenchQueueTitle: "\u4f18\u5148\u5904\u7406",
+  workbenchSignalsTitle: "\u5173\u952e\u4fe1\u53f7",
+  workbenchActionsTitle: "\u53ef\u7ee7\u7eed\u6267\u884c",
+  workbenchDerivedTitle: "\u81ea\u52a8\u751f\u6210",
+  workbenchNoArtifacts: "\u8fd9\u4e00\u7c7b\u76ee\u524d\u6ca1\u6709\u53ef\u7528\u9644\u4ef6\u3002",
+  workbenchNoPipeline: "\u8fd8\u6ca1\u6709\u9488\u5bf9\u8fd9\u4e00\u7c7b\u7684\u81ea\u52a8\u94fe\u8def\u3002",
+  workbenchMetricArtifacts: "\u9644\u4ef6",
+  workbenchMetricGenerated: "\u751f\u6210",
+  workbenchMetricFlags: "\u5019\u9009",
+  familyImage: "\u56fe\u50cf",
+  familyAudio: "\u97f3\u9891",
+  familyNetwork: "\u6d41\u91cf",
+  familyBinary: "\u4e8c\u8fdb\u5236",
   confidenceLabel: "\u7f6e\u4fe1",
   flagKicker: "FLAG",
   flagTitle: "\u5019\u9009\u503c",
@@ -46,6 +61,9 @@ const STRINGS = {
   findingTitle: "\u91cd\u70b9\u68c0\u67e5\u9879",
   toolKicker: "\u5de5\u5177\u94fe",
   toolTitle: "\u914d\u5408\u4f7f\u7528",
+  toolInstalled: "\u5df2\u63a5\u5165",
+  toolMissing: "\u672a\u5b89\u88c5",
+  toolMissingNote: "\u5b89\u88c5\u540e\u5bf9\u5e94\u6309\u94ae\u4f1a\u53d8\u6210\u53ef\u6267\u884c\u52a8\u4f5c",
   settingsKicker: "\u8fd0\u884c\u7b56\u7565",
   settingsTitle: "\u9879\u76ee\u57fa\u7ebf",
   settingsThemeTitle: "\u754c\u9762\u98ce\u683c",
@@ -116,15 +134,16 @@ const VIEW_COPY = {
 };
 
 const ROADMAP_ITEMS = [
-  "\u8865\u9f50 WAV \u9891\u8c31\u56fe\u3001\u97f3\u9891 chunk \u5f02\u5e38\u68c0\u6d4b\u548c\u83ab\u65af/\u97f3\u8c03\u7c7b\u7ebf\u7d22\u63d0\u53d6\u3002",
-  "\u7ed9\u6bcf\u4e2a\u9644\u4ef6\u589e\u52a0\u8bc1\u636e\u7b14\u8bb0\u4e0e\u5df2\u9a8c\u8bc1\u7ed3\u8bba\uff0c\u628a\u81ea\u52a8\u7ed3\u679c\u548c\u4eba\u5de5\u5224\u65ad\u653e\u5728\u4e00\u8d77\u3002",
-  "\u5bf9 ELF\u3001PE\u3001APK \u52a0\u5165\u66f4\u7ec6\u7684\u7a0b\u5e8f\u7279\u5f81\u62bd\u53d6\uff0c\u8ba9 reverse/pwn \u5206\u6d41\u66f4\u7a33\u5b9a\u3002",
-  "\u4e3a PDF / Office / \u56fe\u50cf / \u6d41\u91cf\u9898\u578b\u62c6\u51fa\u4e13\u9898\u5de5\u4f5c\u9762\u677f\uff0c\u4e0d\u518d\u53ea\u662f\u901a\u7528\u7ed3\u679c\u5361\u7247\u3002",
+  "\u628a PDF / Office \u4e5f\u62c6\u6210\u4e13\u9898\u5de5\u4f5c\u9762\u677f\uff0c\u8ba9\u6587\u6863\u7c7b\u9898\u76ee\u4e0d\u518d\u843d\u5728\u901a\u7528\u5361\u7247\u91cc\u3002",
+  "\u4e3a APK \u7ee7\u7eed\u8865\u4e8c\u8fdb\u5236 AXML \u7ed3\u6784\u3001resource id \u6620\u5c04\u548c\u66f4\u5b8c\u6574\u7684 DEX method/proto \u89c6\u56fe\u3002",
+  "\u4e3a ELF / PE \u8865 symbol \u53ef\u89c1\u6027\u3001reloc \u8be6\u60c5\u3001export/import \u5206\u7ec4\u548c\u4fdd\u62a4\u9879\u63d0\u793a\u3002",
+  "\u628a\u5de5\u4f5c\u9762\u677f\u505a\u6210\u53ef\u76f4\u63a5\u8054\u52a8\u52a8\u4f5c\u3001\u8bc1\u636e\u7b14\u8bb0\u548c\u7ed3\u679c\u8fc7\u6ee4\u7684\u4e13\u9898\u9875\u3002",
   "\u6dfb\u52a0\u6269\u5c55\u5f0f\u5206\u6790\u5668\u4e0e\u53d1\u5e03\u6d41\u7a0b\uff0c\u8ba9\u540e\u7eed\u89c4\u5219\u548c\u6253\u5305\u66f4\u5bb9\u6613\u8fed\u4ee3\u3002",
 ];
 
 const state = {
   activeView: "workspace",
+  workbenchFamily: "binary",
   theme: localStorage.getItem("ctf-theme") || "light",
   artifacts: [],
   analysis: null,
@@ -181,6 +200,8 @@ const elements = {
   summaryConfidence: document.getElementById("summary-confidence"),
   summaryText: document.getElementById("summary-text"),
   summaryEvidence: document.getElementById("summary-evidence"),
+  workbenchTabs: document.getElementById("workbench-tabs"),
+  workbenchPanel: document.getElementById("workbench-panel"),
   pipelineList: document.getElementById("pipeline-list"),
   flagList: document.getElementById("flag-list"),
   nextList: document.getElementById("next-list"),
@@ -300,6 +321,7 @@ function buildWorkspaceSnapshot() {
     version: WORKSPACE_VERSION,
     theme: state.theme,
     activeView: state.activeView,
+    workbenchFamily: state.workbenchFamily,
     challenge: {
       title: elements.titleInput.value.trim(),
       tags: splitTags(elements.tagsInput.value),
@@ -510,6 +532,204 @@ function sortArtifactsForDisplay(items) {
   });
 }
 
+function getWorkbenchMeta(family) {
+  if (family === "image") {
+    return {
+      label: STRINGS.familyImage,
+      subtitle: "\u56fe\u50cf\u3001\u9690\u5199\u3001\u901a\u9053\u4e0e\u9644\u52a0\u6570\u636e",
+      description: "\u628a PNG/JPEG \u7684\u5143\u6570\u636e\u3001QR/\u6761\u7801\u3001LSB \u548c\u53ef\u89c6\u5316\u5bfc\u51fa\u6536\u5728\u540c\u4e00\u4e2a\u9762\u677f\u91cc\u3002",
+    };
+  }
+  if (family === "audio") {
+    return {
+      label: STRINGS.familyAudio,
+      subtitle: "WAV \u5757\u3001LSB\u3001\u97f3\u8c03\u4e0e Morse",
+      description: "\u628a\u97f3\u9891\u5143\u6570\u636e\u3001\u6d3b\u52a8\u6bb5\u3001Morse \u5019\u9009\u548c\u6ce2\u5f62/\u9891\u8c31\u56fe\u6536\u5728\u4e00\u8d77\u3002",
+    };
+  }
+  if (family === "network") {
+    return {
+      label: STRINGS.familyNetwork,
+      subtitle: "HTTP / DNS / TLS / TCP \u91cd\u7ec4",
+      description: "\u628a pcap/pcapng \u91cc\u7684\u4f1a\u8bdd\u7ebf\u7d22\u3001Cookie/Token \u548c\u5bfc\u51fa\u5bf9\u8c61\u5355\u72ec\u6536\u7eb3\u3002",
+    };
+  }
+  return {
+    label: STRINGS.familyBinary,
+    subtitle: "ELF / PE / APK \u672c\u5730\u7ed3\u6784\u5316\u62c6\u89e3",
+    description: "\u628a section\u3001imports/exports\u3001symbols/relocs\u3001Manifest/DEX \u548c\u6253\u5305\u7ed3\u6784\u96c6\u4e2d\u5728\u4e8c\u8fdb\u5236\u9762\u677f\u3002",
+  };
+}
+
+function getWorkbenchFamilies(result) {
+  const order = ["binary", "network", "image", "audio"];
+  return order
+    .map((family) => {
+      const artifacts = sortArtifactsForDisplay((result.artifacts || []).filter((item) => item.family === family));
+      return artifacts.length ? { family, artifacts, meta: getWorkbenchMeta(family) } : null;
+    })
+    .filter(Boolean);
+}
+
+function createMetricPill(value, label) {
+  const item = document.createElement("div");
+  item.className = "metric-pill";
+  item.innerHTML = `<strong>${escapeHtml(String(value))}</strong><span>${escapeHtml(label)}</span>`;
+  return item;
+}
+
+function createWorkbenchActionChip(label, count) {
+  const chip = document.createElement("span");
+  chip.className = "chip tool-chip";
+  chip.textContent = count > 1 ? `${label} × ${count}` : label;
+  return chip;
+}
+
+function createWorkbenchPipelineRow(entry) {
+  const row = document.createElement("div");
+  row.className = "stack-item";
+  const createdNames = (entry.createdArtifacts || []).map((artifact) => artifact.name).join("  |  ");
+  row.innerHTML = `<strong>${escapeHtml(entry.sourceName)} \u2192 ${escapeHtml(entry.actionLabel)}</strong><p>${escapeHtml(
+    entry.message,
+  )}</p><small>${escapeHtml(createdNames)}</small>`;
+  return row;
+}
+
+function renderWorkbench(result) {
+  elements.workbenchTabs.innerHTML = "";
+  elements.workbenchPanel.innerHTML = "";
+
+  const families = getWorkbenchFamilies(result);
+  if (!families.length) {
+    elements.workbenchPanel.innerHTML = `<p class="empty-copy">${STRINGS.workbenchNoArtifacts}</p>`;
+    return;
+  }
+
+  const familySet = new Set(families.map((item) => item.family));
+  if (!familySet.has(state.workbenchFamily)) {
+    state.workbenchFamily = families[0].family;
+  }
+
+  families.forEach((item) => {
+    const button = document.createElement("button");
+    button.className = `workbench-tab${item.family === state.workbenchFamily ? " active" : ""}`;
+    button.type = "button";
+    button.innerHTML = `<strong>${escapeHtml(item.meta.label)}</strong><span>${item.artifacts.length}</span>`;
+    button.addEventListener("click", () => {
+      state.workbenchFamily = item.family;
+      renderResults();
+      scheduleWorkspaceSave();
+    });
+    elements.workbenchTabs.append(button);
+  });
+
+  const current = families.find((item) => item.family === state.workbenchFamily) || families[0];
+  const currentPaths = new Set(current.artifacts.map((item) => item.path));
+  const currentFlags = current.artifacts.reduce((sum, artifact) => sum + (artifact.flagCandidates?.length || 0), 0);
+  const currentGenerated = current.artifacts.filter((item) => item.sourceKind === "generated").length;
+  const currentPipeline = (result.pipelineLog || []).filter((entry) => {
+    if (currentPaths.has(entry.sourcePath)) {
+      return true;
+    }
+    return (entry.createdArtifacts || []).some((artifact) => artifact.family === current.family);
+  });
+  const actionCounts = new Map();
+  current.artifacts.forEach((artifact) => {
+    (artifact.actions || []).forEach((action) => {
+      actionCounts.set(action.label, (actionCounts.get(action.label) || 0) + 1);
+    });
+  });
+  const signalLines = [];
+  current.artifacts.forEach((artifact) => {
+    (artifact.highlights || []).slice(0, 2).forEach((item) => signalLines.push(`${artifact.name}: ${item}`));
+  });
+
+  const hero = document.createElement("div");
+  hero.className = "workbench-hero";
+
+  const copy = document.createElement("div");
+  copy.className = "workbench-copy";
+  copy.innerHTML = `<p class="panel-kicker">${escapeHtml(current.meta.subtitle)}</p><h4>${escapeHtml(
+    current.meta.label,
+  )}</h4><p class="body-copy">${escapeHtml(current.meta.description)}</p>`;
+  hero.append(copy);
+
+  const metrics = document.createElement("div");
+  metrics.className = "workbench-metrics";
+  metrics.append(
+    createMetricPill(current.artifacts.length, STRINGS.workbenchMetricArtifacts),
+    createMetricPill(currentGenerated, STRINGS.workbenchMetricGenerated),
+    createMetricPill(currentFlags, STRINGS.workbenchMetricFlags),
+  );
+  hero.append(metrics);
+  elements.workbenchPanel.append(hero);
+
+  const body = document.createElement("div");
+  body.className = "workbench-body";
+
+  const left = document.createElement("div");
+  left.className = "workbench-column";
+  const queuePanel = document.createElement("section");
+  queuePanel.className = "workbench-subpanel";
+  queuePanel.innerHTML = `<div class="panel-head compact-head"><div><p class="panel-kicker">${STRINGS.workbenchQueueTitle}</p></div></div>`;
+  current.artifacts.slice(0, 4).forEach((artifact) => {
+    queuePanel.append(createDetailCard(artifact, { editableEvidence: false }));
+  });
+  left.append(queuePanel);
+
+  const right = document.createElement("div");
+  right.className = "workbench-column";
+
+  const signalPanel = document.createElement("section");
+  signalPanel.className = "workbench-subpanel";
+  signalPanel.innerHTML = `<div class="panel-head compact-head"><div><p class="panel-kicker">${STRINGS.workbenchSignalsTitle}</p></div></div>`;
+  if (!signalLines.length) {
+    signalPanel.innerHTML += `<p class="empty-copy">${STRINGS.workbenchNoArtifacts}</p>`;
+  } else {
+    const signalList = document.createElement("div");
+    signalList.className = "stack-list";
+    signalLines.slice(0, 10).forEach((item) => {
+      const box = document.createElement("div");
+      box.className = "stack-item";
+      box.textContent = item;
+      signalList.append(box);
+    });
+    signalPanel.append(signalList);
+  }
+
+  const actionPanel = document.createElement("section");
+  actionPanel.className = "workbench-subpanel";
+  actionPanel.innerHTML = `<div class="panel-head compact-head"><div><p class="panel-kicker">${STRINGS.workbenchActionsTitle}</p></div></div>`;
+  const actionWrap = document.createElement("div");
+  actionWrap.className = "chip-row";
+  if (!actionCounts.size) {
+    actionWrap.innerHTML = `<p class="empty-copy">${STRINGS.workbenchNoArtifacts}</p>`;
+  } else {
+    [...actionCounts.entries()]
+      .sort((leftEntry, rightEntry) => rightEntry[1] - leftEntry[1])
+      .forEach(([label, count]) => actionWrap.append(createWorkbenchActionChip(label, count)));
+  }
+  actionPanel.append(actionWrap);
+
+  const pipelinePanel = document.createElement("section");
+  pipelinePanel.className = "workbench-subpanel";
+  pipelinePanel.innerHTML = `<div class="panel-head compact-head"><div><p class="panel-kicker">${STRINGS.workbenchDerivedTitle}</p></div></div>`;
+  if (!currentPipeline.length) {
+    pipelinePanel.innerHTML += `<p class="empty-copy">${STRINGS.workbenchNoPipeline}</p>`;
+  } else {
+    const pipelineList = document.createElement("div");
+    pipelineList.className = "stack-list";
+    currentPipeline.slice(0, 8).forEach((entry) => {
+      pipelineList.append(createWorkbenchPipelineRow(entry));
+    });
+    pipelinePanel.append(pipelineList);
+  }
+
+  right.append(signalPanel, actionPanel, pipelinePanel);
+  body.append(left, right);
+  elements.workbenchPanel.append(body);
+}
+
 function setFinalFlag(candidate) {
   state.casebook.finalFlag = candidate ? { value: candidate.value, source: candidate.source } : null;
   renderResults();
@@ -656,6 +876,8 @@ function renderResults() {
     elements.summaryConfidence.textContent = "--";
     elements.summaryText.textContent = STRINGS.emptyResultsSummary;
     elements.summaryEvidence.innerHTML = "";
+    elements.workbenchTabs.innerHTML = "";
+    elements.workbenchPanel.innerHTML = `<p class="empty-copy">${STRINGS.workbenchNoArtifacts}</p>`;
     elements.pipelineList.innerHTML = `<p class="empty-copy">${STRINGS.emptyPipeline}</p>`;
     elements.flagList.innerHTML = `<p class="empty-copy">${STRINGS.emptyFlags}</p>`;
     elements.nextList.innerHTML = "";
@@ -677,6 +899,8 @@ function renderResults() {
     chip.textContent = item;
     elements.summaryEvidence.append(chip);
   });
+
+  renderWorkbench(result);
 
   elements.pipelineList.innerHTML = "";
   if (!result.pipelineLog || !result.pipelineLog.length) {
@@ -734,12 +958,27 @@ function renderResults() {
   });
 
   elements.toolList.innerHTML = "";
-  result.classification.tools.forEach((tool) => {
+  (result.classification.tools || []).forEach((tool) => {
     const chip = document.createElement("span");
     chip.className = "chip tool-chip";
     chip.textContent = tool;
     elements.toolList.append(chip);
   });
+  if (result.toolStatus) {
+    (result.toolStatus.installed || []).forEach((tool) => {
+      const chip = document.createElement("span");
+      chip.className = "chip tool-chip installed";
+      chip.textContent = `${tool.label} · ${STRINGS.toolInstalled}`;
+      elements.toolList.append(chip);
+    });
+    (result.toolStatus.missing || []).slice(0, 8).forEach((tool) => {
+      const chip = document.createElement("span");
+      chip.className = "chip tool-chip missing";
+      chip.title = `${tool.purpose} ${tool.installHint}`;
+      chip.textContent = `${tool.label} · ${STRINGS.toolMissing}`;
+      elements.toolList.append(chip);
+    });
+  }
 
   renderNeedsPanel(result.inferredNeeds);
 }
@@ -807,6 +1046,24 @@ function createDetailCard(artifact, options = {}) {
       lines.append(line);
     });
     card.append(lines);
+  }
+
+  if (artifact.toolActions && artifact.toolActions.length) {
+    const toolBox = document.createElement("div");
+    toolBox.className = "artifact-tools";
+    artifact.toolActions.forEach((tool) => {
+      const chip = document.createElement("span");
+      chip.className = `chip tool-chip ${tool.available ? "installed" : "missing"}`;
+      chip.title = tool.available ? tool.executablePath || tool.purpose : `${tool.purpose} ${tool.installHint}`;
+      chip.textContent = `${tool.toolLabel} · ${tool.available ? STRINGS.toolInstalled : STRINGS.toolMissing}`;
+      toolBox.append(chip);
+    });
+    if (artifact.toolActions.some((tool) => !tool.available)) {
+      const note = document.createElement("small");
+      note.textContent = STRINGS.toolMissingNote;
+      toolBox.append(note);
+    }
+    card.append(toolBox);
   }
 
   if (options.editableEvidence) {
@@ -1055,6 +1312,7 @@ async function hydrateWorkspace() {
     persistenceReady = false;
     state.casebook = normalizeCasebook(snapshot.casebook);
     state.activeView = VIEW_COPY[snapshot.activeView] ? snapshot.activeView : "workspace";
+    state.workbenchFamily = ["binary", "network", "image", "audio"].includes(snapshot.workbenchFamily) ? snapshot.workbenchFamily : "binary";
 
     if (snapshot.theme) {
       setTheme(snapshot.theme);

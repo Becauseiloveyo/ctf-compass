@@ -8,6 +8,7 @@ const ExifParser = require("exif-parser");
 const jpeg = require("jpeg-js");
 const jsQR = require("jsqr");
 const { PNG } = require("pngjs");
+const { getToolActionsForArtifact, getToolStatusSummary, runToolAction } = require("./toolkit");
 
 const MAX_FILES = 160;
 const MAX_SAMPLE_BYTES = 1024 * 1024;
@@ -21,6 +22,10 @@ const MAX_HTTP_OBJECTS = 24;
 const MAX_HTTP_BODY_BYTES = 512 * 1024;
 const MAX_AUDIO_BYTES = 12 * 1024 * 1024;
 const MAX_AUDIO_SAMPLES = 600000;
+const MAX_AUDIO_PREVIEW_SAMPLES = 180000;
+const MAX_AUDIO_ANALYSIS_SAMPLES = 320000;
+const MAX_AUDIO_SPECTROGRAM_COLUMNS = 360;
+const MAX_AUDIO_SPECTROGRAM_BINS = 96;
 const BARCODE_READERS = [
   "code_128_reader",
   "code_39_reader",
@@ -52,6 +57,51 @@ const BARCODE_ATTEMPTS = [
     decoder: { readers: BARCODE_READERS },
   },
 ];
+const MORSE_DECODE_MAP = {
+  ".-": "A",
+  "-...": "B",
+  "-.-.": "C",
+  "-..": "D",
+  ".": "E",
+  "..-.": "F",
+  "--.": "G",
+  "....": "H",
+  "..": "I",
+  ".---": "J",
+  "-.-": "K",
+  ".-..": "L",
+  "--": "M",
+  "-.": "N",
+  "---": "O",
+  ".--.": "P",
+  "--.-": "Q",
+  ".-.": "R",
+  "...": "S",
+  "-": "T",
+  "..-": "U",
+  "...-": "V",
+  ".--": "W",
+  "-..-": "X",
+  "-.--": "Y",
+  "--..": "Z",
+  "-----": "0",
+  ".----": "1",
+  "..---": "2",
+  "...--": "3",
+  "....-": "4",
+  ".....": "5",
+  "-....": "6",
+  "--...": "7",
+  "---..": "8",
+  "----.": "9",
+  ".-.-.-": ".",
+  "--..--": ",",
+  "..--..": "?",
+  "-..-.": "/",
+  "-....-": "-",
+  "..--.-": "_",
+  ".--.-.": "@",
+};
 
 const EMBEDDED_SIGNATURES = [
   { id: "zip", label: "ZIP", ext: ".zip", magic: Buffer.from([0x50, 0x4b, 0x03, 0x04]) },
@@ -173,6 +223,29 @@ function formatBytes(size) {
 
 function dedupeStrings(values) {
   return Array.from(new Set(values.filter(Boolean)));
+}
+
+function attachToolBackedActions(artifact) {
+  const toolActions = getToolActionsForArtifact(artifact);
+  artifact.toolActions = toolActions;
+
+  const runnable = toolActions.filter((item) => item.available);
+  runnable.forEach((item) => {
+    artifact.actions.push({
+      id: item.id,
+      label: item.label,
+    });
+  });
+
+  const runnableLabels = dedupeStrings(runnable.map((item) => item.toolLabel));
+  if (runnableLabels.length) {
+    artifact.highlights.push(`可直接调用外部工具：${runnableLabels.join(" / ")}。`);
+  }
+
+  const missingLabels = dedupeStrings(toolActions.filter((item) => !item.available).map((item) => item.toolLabel));
+  if (missingLabels.length) {
+    artifact.suggestions.push(`安装后可增强自动化：${missingLabels.join(" / ")}。`);
+  }
 }
 
 function sanitizeSegment(value) {
@@ -727,6 +800,9 @@ function detectFamily(filePath, sample) {
   if (["pcap", "pcapng"].includes(magic) || [".pcap", ".pcapng", ".cap"].includes(extension)) {
     return { family: "network", badge: magic.toUpperCase() || extension.slice(1).toUpperCase() || "PCAP" };
   }
+  if (extension === ".apk") {
+    return { family: "binary", badge: "APK" };
+  }
   if (["zip", "gzip"].includes(magic) || [".zip", ".7z", ".rar", ".tar", ".gz", ".tgz"].includes(extension)) {
     return { family: "archive", badge: magic.toUpperCase() || extension.slice(1).toUpperCase() || "ZIP" };
   }
@@ -917,6 +993,427 @@ function makeGrayPng(width, height, pixelSelector) {
     }
   }
   return PNG.sync.write(png);
+}
+
+function makeColorPng(width, height, pixelSelector) {
+  const png = new PNG({ width, height });
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const pixelOffset = (y * width + x) * 4;
+      const [r, g, b, a = 255] = pixelSelector(x, y);
+      png.data[pixelOffset] = Math.max(0, Math.min(255, r));
+      png.data[pixelOffset + 1] = Math.max(0, Math.min(255, g));
+      png.data[pixelOffset + 2] = Math.max(0, Math.min(255, b));
+      png.data[pixelOffset + 3] = Math.max(0, Math.min(255, a));
+    }
+  }
+  return PNG.sync.write(png);
+}
+
+function computePercentile(values, percentile) {
+  if (!values.length) {
+    return 0;
+  }
+  const sorted = [...values].sort((left, right) => left - right);
+  const position = Math.max(0, Math.min(sorted.length - 1, (sorted.length - 1) * percentile));
+  const lower = Math.floor(position);
+  const upper = Math.ceil(position);
+  if (lower === upper) {
+    return sorted[lower];
+  }
+  const weight = position - lower;
+  return sorted[lower] * (1 - weight) + sorted[upper] * weight;
+}
+
+function readNormalizedWavSample(buffer, wavInfo, sampleOffset, bytesPerSample) {
+  if (sampleOffset + bytesPerSample > buffer.length) {
+    return 0;
+  }
+  if (wavInfo.bitsPerSample === 8) {
+    return (buffer[sampleOffset] - 128) / 128;
+  }
+  if (wavInfo.bitsPerSample === 16) {
+    return Math.max(-1, Math.min(1, buffer.readInt16LE(sampleOffset) / 32768));
+  }
+  if (wavInfo.bitsPerSample === 24) {
+    const value = (buffer[sampleOffset + 2] << 16) | (buffer[sampleOffset + 1] << 8) | buffer[sampleOffset];
+    const signed = value & 0x800000 ? value - 0x1000000 : value;
+    return Math.max(-1, Math.min(1, signed / 8388608));
+  }
+  if (wavInfo.bitsPerSample === 32) {
+    if (wavInfo.audioFormat === 3) {
+      return Math.max(-1, Math.min(1, buffer.readFloatLE(sampleOffset)));
+    }
+    return Math.max(-1, Math.min(1, buffer.readInt32LE(sampleOffset) / 2147483648));
+  }
+  return 0;
+}
+
+function extractMonoAudioTrack(buffer, wavInfo, limitSamples = MAX_AUDIO_ANALYSIS_SAMPLES) {
+  if (!wavInfo || wavInfo.dataOffset < 0 || !wavInfo.channels || !wavInfo.bitsPerSample) {
+    return null;
+  }
+  if (![1, 3].includes(wavInfo.audioFormat) || ![8, 16, 24, 32].includes(wavInfo.bitsPerSample)) {
+    return null;
+  }
+
+  const bytesPerSample = Math.ceil(wavInfo.bitsPerSample / 8);
+  const frameSize = Math.max(1, wavInfo.channels * bytesPerSample);
+  const dataEnd = Math.min(buffer.length, wavInfo.dataOffset + wavInfo.dataSize);
+  const totalFrames = Math.floor((dataEnd - wavInfo.dataOffset) / frameSize);
+  if (!totalFrames) {
+    return null;
+  }
+
+  const step = Math.max(1, Math.ceil(totalFrames / Math.max(1, limitSamples)));
+  const samples = new Float32Array(Math.ceil(totalFrames / step));
+  let writeIndex = 0;
+
+  for (let frameIndex = 0; frameIndex < totalFrames; frameIndex += step) {
+    const frameOffset = wavInfo.dataOffset + frameIndex * frameSize;
+    let mixed = 0;
+    let channelCount = 0;
+    for (let channel = 0; channel < wavInfo.channels; channel += 1) {
+      const sampleOffset = frameOffset + channel * bytesPerSample;
+      mixed += readNormalizedWavSample(buffer, wavInfo, sampleOffset, bytesPerSample);
+      channelCount += 1;
+    }
+    samples[writeIndex] = channelCount ? mixed / channelCount : 0;
+    writeIndex += 1;
+  }
+
+  return {
+    samples: samples.subarray(0, writeIndex),
+    sampleRate: wavInfo.sampleRate / step,
+    sourceStep: step,
+    durationSeconds: totalFrames / wavInfo.sampleRate,
+  };
+}
+
+function fillShortGaps(flags, maxGap) {
+  const output = flags.slice();
+  let index = 0;
+  while (index < output.length) {
+    if (output[index]) {
+      index += 1;
+      continue;
+    }
+    const gapStart = index;
+    while (index < output.length && !output[index]) {
+      index += 1;
+    }
+    const gapEnd = index;
+    const gapLength = gapEnd - gapStart;
+    const hasLeft = gapStart > 0 && output[gapStart - 1];
+    const hasRight = gapEnd < output.length && output[gapEnd];
+    if (hasLeft && hasRight && gapLength <= maxGap) {
+      for (let cursor = gapStart; cursor < gapEnd; cursor += 1) {
+        output[cursor] = true;
+      }
+    }
+  }
+  return output;
+}
+
+function removeShortActivity(flags, minRun) {
+  const output = flags.slice();
+  let index = 0;
+  while (index < output.length) {
+    if (!output[index]) {
+      index += 1;
+      continue;
+    }
+    const runStart = index;
+    while (index < output.length && output[index]) {
+      index += 1;
+    }
+    const runEnd = index;
+    if (runEnd - runStart < minRun) {
+      for (let cursor = runStart; cursor < runEnd; cursor += 1) {
+        output[cursor] = false;
+      }
+    }
+  }
+  return output;
+}
+
+function estimateToneFrequency(samples, sampleRate) {
+  if (!samples || samples.length < 8 || !sampleRate) {
+    return 0;
+  }
+  let crossings = 0;
+  let previous = samples[0] >= 0 ? 1 : -1;
+  for (let index = 1; index < samples.length; index += 1) {
+    const current = samples[index] >= 0 ? 1 : -1;
+    if (current !== previous) {
+      crossings += 1;
+      previous = current;
+    }
+  }
+  const durationSeconds = samples.length / sampleRate;
+  if (!durationSeconds) {
+    return 0;
+  }
+  const frequency = crossings / (2 * durationSeconds);
+  if (!Number.isFinite(frequency) || frequency < 40 || frequency > sampleRate / 2) {
+    return 0;
+  }
+  return frequency;
+}
+
+function summarizeDominantFrequencies(segments) {
+  const buckets = new Map();
+  segments.forEach((segment) => {
+    if (!segment.frequencyHz) {
+      return;
+    }
+    const rounded = Math.round(segment.frequencyHz / 10) * 10;
+    const current = buckets.get(rounded) || 0;
+    buckets.set(rounded, current + segment.durationSeconds);
+  });
+
+  return [...buckets.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 3)
+    .map(([frequencyHz, durationSeconds]) => ({ frequencyHz, durationSeconds }));
+}
+
+function decodeMorseFromRuns(runs) {
+  const activeRuns = runs.filter((item) => item.active && item.durationSeconds >= 0.03);
+  if (activeRuns.length < 3) {
+    return [];
+  }
+
+  const candidateUnits = runs
+    .filter((item) => item.durationSeconds >= 0.03 && item.durationSeconds <= 0.7)
+    .map((item) => item.durationSeconds);
+  if (!candidateUnits.length) {
+    return [];
+  }
+
+  const unit = computePercentile(candidateUnits, 0.22);
+  if (!unit || unit < 0.025 || unit > 0.45) {
+    return [];
+  }
+
+  const tokens = [];
+  let symbol = "";
+  runs.forEach((run) => {
+    const units = run.durationSeconds / unit;
+    if (run.active) {
+      symbol += units <= 2.2 ? "." : "-";
+      return;
+    }
+    if (units <= 2.2) {
+      return;
+    }
+    if (symbol) {
+      tokens.push(symbol);
+      symbol = "";
+    }
+    tokens.push(units <= 5.5 ? " " : " / ");
+  });
+  if (symbol) {
+    tokens.push(symbol);
+  }
+
+  const pattern = tokens
+    .join("")
+    .replace(/\s+/g, " ")
+    .replace(/(?:\s*\/\s*)+$/g, "")
+    .replace(/^(?:\s*\/\s*)+/g, "")
+    .trim();
+  if (!pattern || !/[.-]/.test(pattern)) {
+    return [];
+  }
+
+  const words = pattern.split(" / ").map((entry) => entry.trim()).filter(Boolean);
+  const decodedWords = [];
+  let validChars = 0;
+
+  words.forEach((word) => {
+    const letters = word.split(" ").filter(Boolean);
+    const decoded = letters
+      .map((letter) => {
+        const value = MORSE_DECODE_MAP[letter] || "?";
+        if (value !== "?") {
+          validChars += 1;
+        }
+        return value;
+      })
+      .join("");
+    decodedWords.push(decoded);
+  });
+
+  const text = decodedWords.join(" ").trim();
+  if (validChars < 3 || !text || /^[?\s]+$/.test(text)) {
+    return [];
+  }
+
+  return [
+    {
+      text,
+      pattern,
+      unitMilliseconds: Math.round(unit * 1000),
+    },
+  ];
+}
+
+function analyzeWavSignal(buffer, wavInfo, options = {}) {
+  const track = extractMonoAudioTrack(buffer, wavInfo, options.maxSamples || MAX_AUDIO_ANALYSIS_SAMPLES);
+  if (!track || track.samples.length < 64 || track.sampleRate < 100) {
+    return null;
+  }
+
+  const hopSeconds = options.hopSeconds || 0.01;
+  const windowSeconds = options.windowSeconds || 0.02;
+  const hopSize = Math.max(8, Math.round(track.sampleRate * hopSeconds));
+  const windowSize = Math.max(hopSize * 2, Math.round(track.sampleRate * windowSeconds));
+  if (track.samples.length < windowSize) {
+    return null;
+  }
+
+  const frames = [];
+  const rmsValues = [];
+  for (let start = 0; start + windowSize <= track.samples.length; start += hopSize) {
+    let energy = 0;
+    for (let index = 0; index < windowSize; index += 1) {
+      const sample = track.samples[start + index];
+      energy += sample * sample;
+    }
+    const rms = Math.sqrt(energy / windowSize);
+    rmsValues.push(rms);
+    frames.push({ startSample: start, rms });
+  }
+
+  if (!frames.length) {
+    return null;
+  }
+
+  const threshold = Math.max(0.02, computePercentile(rmsValues, 0.9) * 0.3);
+  let activeFlags = frames.map((frame) => frame.rms >= threshold);
+  activeFlags = fillShortGaps(activeFlags, Math.max(1, Math.round(0.03 / hopSeconds)));
+  activeFlags = removeShortActivity(activeFlags, Math.max(2, Math.round(0.04 / hopSeconds)));
+
+  const runs = [];
+  let runStart = 0;
+  for (let index = 1; index <= activeFlags.length; index += 1) {
+    if (index < activeFlags.length && activeFlags[index] === activeFlags[runStart]) {
+      continue;
+    }
+    const active = activeFlags[runStart];
+    const startSeconds = (runStart * hopSize) / track.sampleRate;
+    const endSample = index >= activeFlags.length ? track.samples.length : Math.min(track.samples.length, (index - 1) * hopSize + windowSize);
+    const endSeconds = endSample / track.sampleRate;
+    runs.push({
+      active,
+      startSeconds,
+      endSeconds,
+      durationSeconds: Math.max(0, endSeconds - startSeconds),
+      startSample: runStart * hopSize,
+      endSample,
+    });
+    runStart = index;
+  }
+
+  const activeSegments = runs
+    .filter((item) => item.active && item.durationSeconds >= 0.04)
+    .map((item) => {
+      const segmentSamples = track.samples.subarray(item.startSample, item.endSample);
+      return {
+        startSeconds: item.startSeconds,
+        endSeconds: item.endSeconds,
+        durationSeconds: item.durationSeconds,
+        frequencyHz: estimateToneFrequency(segmentSamples, track.sampleRate),
+      };
+    });
+
+  const dominantFrequencies = summarizeDominantFrequencies(activeSegments);
+  const morseCandidates = decodeMorseFromRuns(runs);
+
+  return {
+    sampleRate: track.sampleRate,
+    threshold,
+    activeSegments,
+    dominantFrequencies,
+    morseCandidates,
+  };
+}
+
+function spectrogramColor(value) {
+  const stops = [
+    [16, 20, 28],
+    [21, 66, 92],
+    [17, 127, 117],
+    [89, 178, 244],
+    [247, 241, 181],
+  ];
+  const clamped = Math.max(0, Math.min(1, value));
+  const scaled = clamped * (stops.length - 1);
+  const lower = Math.floor(scaled);
+  const upper = Math.min(stops.length - 1, Math.ceil(scaled));
+  const weight = scaled - lower;
+  const left = stops[lower];
+  const right = stops[upper];
+  return [
+    Math.round(left[0] * (1 - weight) + right[0] * weight),
+    Math.round(left[1] * (1 - weight) + right[1] * weight),
+    Math.round(left[2] * (1 - weight) + right[2] * weight),
+  ];
+}
+
+function renderWavSpectrogram(buffer, wavInfo, options = {}) {
+  const track = extractMonoAudioTrack(buffer, wavInfo, options.maxSamples || MAX_AUDIO_ANALYSIS_SAMPLES);
+  if (!track || track.samples.length < 128 || track.sampleRate < 100) {
+    return null;
+  }
+
+  const windowSize = Math.min(512, Math.max(128, 2 ** Math.floor(Math.log2(Math.max(128, track.sampleRate * 0.05)))));
+  const width = Math.max(72, Math.min(MAX_AUDIO_SPECTROGRAM_COLUMNS, Math.floor(track.samples.length / Math.max(32, Math.floor(windowSize / 2)))));
+  const height = MAX_AUDIO_SPECTROGRAM_BINS;
+  const maxStart = Math.max(0, track.samples.length - windowSize);
+  const minFrequency = 60;
+  const maxFrequency = Math.min(track.sampleRate / 2, 4800);
+  const frequencies = Array.from({ length: height }, (_item, index) => {
+    const ratio = height === 1 ? 0 : index / (height - 1);
+    return minFrequency * ((maxFrequency / minFrequency) ** ratio);
+  });
+  const window = Array.from({ length: windowSize }, (_item, index) => 0.5 - 0.5 * Math.cos((2 * Math.PI * index) / (windowSize - 1)));
+  const matrix = Array.from({ length: width }, () => new Float32Array(height));
+  let maxMagnitude = 0;
+
+  for (let x = 0; x < width; x += 1) {
+    const start = width === 1 ? 0 : Math.floor((x / (width - 1)) * maxStart);
+    const segment = track.samples.subarray(start, start + windowSize);
+    for (let index = 0; index < height; index += 1) {
+      const frequency = frequencies[index];
+      const omega = (2 * Math.PI * frequency) / track.sampleRate;
+      const coeff = 2 * Math.cos(omega);
+      let q0 = 0;
+      let q1 = 0;
+      let q2 = 0;
+      for (let cursor = 0; cursor < segment.length; cursor += 1) {
+        q0 = coeff * q1 - q2 + segment[cursor] * window[cursor];
+        q2 = q1;
+        q1 = q0;
+      }
+      const magnitude = Math.sqrt(Math.max(0, q1 * q1 + q2 * q2 - coeff * q1 * q2));
+      const logMagnitude = Math.log1p(magnitude);
+      matrix[x][index] = logMagnitude;
+      maxMagnitude = Math.max(maxMagnitude, logMagnitude);
+    }
+  }
+
+  if (!maxMagnitude) {
+    return null;
+  }
+
+  return makeColorPng(width, height, (x, y) => {
+    const index = height - 1 - y;
+    const normalized = matrix[x][index] / maxMagnitude;
+    const [r, g, b] = spectrogramColor(normalized);
+    return [r, g, b, 255];
+  });
 }
 
 function parseWavBuffer(buffer) {
@@ -2119,6 +2616,1056 @@ function buildPdfSummaryText(fileName, report) {
   return `${lines.join("\n")}\n`;
 }
 
+function readUIntValue(buffer, offset, size, littleEndian = true) {
+  if (offset < 0 || offset + size > buffer.length) {
+    return 0;
+  }
+  if (size === 1) {
+    return buffer[offset];
+  }
+  if (size === 2) {
+    return littleEndian ? buffer.readUInt16LE(offset) : buffer.readUInt16BE(offset);
+  }
+  if (size === 4) {
+    return littleEndian ? buffer.readUInt32LE(offset) : buffer.readUInt32BE(offset);
+  }
+  return 0;
+}
+
+function readBigUIntValue(buffer, offset, littleEndian = true) {
+  if (offset < 0 || offset + 8 > buffer.length) {
+    return 0n;
+  }
+  return littleEndian ? buffer.readBigUInt64LE(offset) : buffer.readBigUInt64BE(offset);
+}
+
+function toSafeNumber(value) {
+  if (typeof value === "bigint") {
+    return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : null;
+  }
+  return Number.isFinite(value) ? value : null;
+}
+
+function formatHex(value) {
+  if (value === null || value === undefined) {
+    return "0x0";
+  }
+  if (typeof value === "bigint") {
+    return `0x${value.toString(16)}`;
+  }
+  return `0x${Math.max(0, Number(value)).toString(16)}`;
+}
+
+function readCString(buffer, offset, maxLength = 256) {
+  if (!Number.isFinite(offset) || offset < 0 || offset >= buffer.length) {
+    return "";
+  }
+  const end = Math.min(buffer.length, offset + maxLength);
+  let cursor = offset;
+  while (cursor < end && buffer[cursor] !== 0) {
+    cursor += 1;
+  }
+  return buffer.subarray(offset, cursor).toString("utf8").replace(/\0/g, "").trim();
+}
+
+function formatUnixTimestamp(timestampSeconds) {
+  if (!timestampSeconds) {
+    return "";
+  }
+  const date = new Date(timestampSeconds * 1000);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+}
+
+function getElfTypeLabel(type) {
+  const labels = {
+    1: "REL",
+    2: "EXEC",
+    3: "DYN",
+    4: "CORE",
+  };
+  return labels[type] || `TYPE-${type}`;
+}
+
+function getElfMachineLabel(machine) {
+  const labels = {
+    3: "x86",
+    8: "MIPS",
+    20: "PowerPC",
+    40: "ARM",
+    62: "x86-64",
+    183: "AArch64",
+    243: "RISC-V",
+  };
+  return labels[machine] || `EM-${machine}`;
+}
+
+function getElfSymbolTypeLabel(info) {
+  const labels = {
+    0: "NOTYPE",
+    1: "OBJECT",
+    2: "FUNC",
+    3: "SECTION",
+    4: "FILE",
+    5: "COMMON",
+    6: "TLS",
+  };
+  return labels[info & 0x0f] || `TYPE-${info & 0x0f}`;
+}
+
+function getElfSymbolBindLabel(info) {
+  const labels = {
+    0: "LOCAL",
+    1: "GLOBAL",
+    2: "WEAK",
+  };
+  return labels[(info >> 4) & 0x0f] || `BIND-${(info >> 4) & 0x0f}`;
+}
+
+function parseElfSymbolSection(buffer, sections, section, littleEndian, is64) {
+  const stringSection = sections[section.link];
+  const symbolOffset = toSafeNumber(section.offset);
+  const symbolSize = toSafeNumber(section.size);
+  const stringOffset = stringSection ? toSafeNumber(stringSection.offset) : null;
+  const stringSize = stringSection ? toSafeNumber(stringSection.size) : null;
+  if (
+    symbolOffset === null ||
+    symbolSize === null ||
+    symbolOffset + symbolSize > buffer.length ||
+    !stringSection ||
+    stringOffset === null ||
+    stringSize === null ||
+    stringOffset + stringSize > buffer.length
+  ) {
+    return null;
+  }
+
+  const entrySize = Math.max(toSafeNumber(section.entrySize) || 0, is64 ? 24 : 16);
+  if (!entrySize) {
+    return null;
+  }
+  const stringTable = buffer.subarray(stringOffset, stringOffset + stringSize);
+  const namesByIndex = [];
+  const functions = [];
+  const globals = [];
+  const objects = [];
+  let count = 0;
+  const maxSymbols = Math.min(512, Math.floor(symbolSize / entrySize));
+
+  for (let index = 0; index < maxSymbols; index += 1) {
+    const offset = symbolOffset + index * entrySize;
+    if (offset + entrySize > symbolOffset + symbolSize) {
+      break;
+    }
+    const nameOffset = readUIntValue(buffer, offset, 4, littleEndian);
+    const info = buffer[offset + (is64 ? 4 : 12)] || 0;
+    const name = nameOffset < stringTable.length ? readCString(stringTable, nameOffset, 256) : "";
+    namesByIndex[index] = name;
+    if (!name) {
+      continue;
+    }
+    count += 1;
+    const type = getElfSymbolTypeLabel(info);
+    const bind = getElfSymbolBindLabel(info);
+    const label = `${name} [${type}/${bind}]`;
+    if (type === "FUNC" && functions.length < 40) {
+      functions.push(label);
+    }
+    if (bind === "GLOBAL" && globals.length < 40) {
+      globals.push(label);
+    }
+    if (type === "OBJECT" && objects.length < 40) {
+      objects.push(label);
+    }
+  }
+
+  return {
+    name: section.name,
+    count,
+    functions: dedupeStrings(functions),
+    globals: dedupeStrings(globals),
+    objects: dedupeStrings(objects),
+    namesByIndex,
+  };
+}
+
+function parseElfRelocationSection(buffer, sections, section, littleEndian, is64, symbolNameMaps) {
+  const relocationOffset = toSafeNumber(section.offset);
+  const relocationSize = toSafeNumber(section.size);
+  if (relocationOffset === null || relocationSize === null || relocationOffset + relocationSize > buffer.length) {
+    return null;
+  }
+
+  const isRela = section.type === 4;
+  const entrySize = Math.max(toSafeNumber(section.entrySize) || 0, is64 ? (isRela ? 24 : 16) : (isRela ? 12 : 8));
+  if (!entrySize) {
+    return null;
+  }
+
+  const count = Math.min(512, Math.floor(relocationSize / entrySize));
+  const targetSection = Number.isInteger(section.info) && section.info >= 0 && section.info < sections.length ? sections[section.info] : null;
+  const namesByIndex =
+    Number.isInteger(section.link) && symbolNameMaps.has(section.link) ? symbolNameMaps.get(section.link) : [];
+  const symbols = [];
+
+  for (let index = 0; index < count; index += 1) {
+    const offset = relocationOffset + index * entrySize;
+    if (offset + entrySize > relocationOffset + relocationSize) {
+      break;
+    }
+    const info = is64 ? readBigUIntValue(buffer, offset + 8, littleEndian) : BigInt(readUIntValue(buffer, offset + 4, 4, littleEndian));
+    const symbolIndex = is64 ? Number(info >> 32n) : Number(info >> 8n);
+    const symbolName = namesByIndex[symbolIndex];
+    if (symbolName && symbols.length < 20) {
+      symbols.push(symbolName);
+    }
+  }
+
+  return {
+    name: section.name,
+    target: targetSection?.name || "",
+    count,
+    symbols: dedupeStrings(symbols),
+  };
+}
+
+function parseElfBinary(buffer) {
+  if (detectMagic(buffer) !== "elf" || buffer.length < 52) {
+    return null;
+  }
+
+  const elfClass = buffer[4];
+  const is64 = elfClass === 2;
+  const littleEndian = buffer[5] !== 2;
+  if (![1, 2].includes(elfClass)) {
+    return null;
+  }
+
+  const headerSize = is64 ? 64 : 52;
+  if (buffer.length < headerSize) {
+    return null;
+  }
+
+  const readWord = (offset, size) => readUIntValue(buffer, offset, size, littleEndian);
+  const readAddr = (offset) => (is64 ? readBigUIntValue(buffer, offset, littleEndian) : BigInt(readWord(offset, 4)));
+  const type = readWord(16, 2);
+  const machine = readWord(18, 2);
+  const entry = readAddr(is64 ? 24 : 24);
+  const programHeaderOffset = is64 ? readBigUIntValue(buffer, 32, littleEndian) : BigInt(readWord(28, 4));
+  const sectionHeaderOffset = is64 ? readBigUIntValue(buffer, 40, littleEndian) : BigInt(readWord(32, 4));
+  const programHeaderSize = readWord(is64 ? 54 : 42, 2);
+  const programHeaderCount = readWord(is64 ? 56 : 44, 2);
+  const sectionHeaderSize = readWord(is64 ? 58 : 46, 2);
+  const sectionHeaderCount = readWord(is64 ? 60 : 48, 2);
+  const sectionNameIndex = readWord(is64 ? 62 : 50, 2);
+
+  const rawSections = [];
+  const sectionHeaderStart = toSafeNumber(sectionHeaderOffset);
+  if (sectionHeaderStart !== null && sectionHeaderSize >= (is64 ? 64 : 40)) {
+    const maxSections = Math.min(sectionHeaderCount, 128);
+    for (let index = 0; index < maxSections; index += 1) {
+      const offset = sectionHeaderStart + index * sectionHeaderSize;
+      if (offset < 0 || offset + sectionHeaderSize > buffer.length) {
+        break;
+      }
+      const nameOffset = readWord(offset, 4);
+      const sectionType = readWord(offset + 4, 4);
+      const fileOffset = is64 ? readBigUIntValue(buffer, offset + 24, littleEndian) : BigInt(readWord(offset + 16, 4));
+      const size = is64 ? readBigUIntValue(buffer, offset + 32, littleEndian) : BigInt(readWord(offset + 20, 4));
+      const entrySize = is64 ? readBigUIntValue(buffer, offset + 56, littleEndian) : BigInt(readWord(offset + 36, 4));
+      const link = readWord(offset + (is64 ? 40 : 24), 4);
+      const info = readWord(offset + (is64 ? 44 : 28), 4);
+      rawSections.push({
+        index,
+        nameOffset,
+        type: sectionType,
+        offset: fileOffset,
+        size,
+        entrySize,
+        link,
+        info,
+      });
+    }
+  }
+
+  let sectionNames = null;
+  if (sectionNameIndex < rawSections.length) {
+    const table = rawSections[sectionNameIndex];
+    const tableOffset = toSafeNumber(table.offset);
+    const tableSize = toSafeNumber(table.size);
+    if (tableOffset !== null && tableSize !== null && tableOffset + tableSize <= buffer.length) {
+      sectionNames = buffer.subarray(tableOffset, tableOffset + tableSize);
+    }
+  }
+
+  const sections = rawSections.map((section) => {
+    const name = sectionNames ? readCString(sectionNames, section.nameOffset, 128) : "";
+    return {
+      ...section,
+      name: name || `section_${section.index}`,
+    };
+  });
+
+  let interpreter = "";
+  const programHeaderStart = toSafeNumber(programHeaderOffset);
+  if (programHeaderStart !== null && programHeaderSize >= (is64 ? 56 : 32)) {
+    const maxHeaders = Math.min(programHeaderCount, 64);
+    for (let index = 0; index < maxHeaders; index += 1) {
+      const offset = programHeaderStart + index * programHeaderSize;
+      if (offset < 0 || offset + programHeaderSize > buffer.length) {
+        break;
+      }
+      const programType = readWord(offset, 4);
+      if (programType !== 3) {
+        continue;
+      }
+      const fileOffset = is64 ? toSafeNumber(readBigUIntValue(buffer, offset + 8, littleEndian)) : readWord(offset + 4, 4);
+      const fileSize = is64 ? toSafeNumber(readBigUIntValue(buffer, offset + 32, littleEndian)) : readWord(offset + 16, 4);
+      if (fileOffset !== null && fileSize !== null && fileOffset + fileSize <= buffer.length) {
+        interpreter = readCString(buffer, fileOffset, Math.min(fileSize, 256));
+        break;
+      }
+    }
+  }
+
+  const dynamicSection = sections.find((section) => section.name === ".dynamic");
+  const dynstrSection = sections.find((section) => section.name === ".dynstr");
+  const neededLibraries = [];
+  let runpath = "";
+  let soname = "";
+  if (dynamicSection && dynstrSection) {
+    const dynamicOffset = toSafeNumber(dynamicSection.offset);
+    const dynamicSize = toSafeNumber(dynamicSection.size);
+    const dynstrOffset = toSafeNumber(dynstrSection.offset);
+    const dynstrSize = toSafeNumber(dynstrSection.size);
+    if (
+      dynamicOffset !== null &&
+      dynamicSize !== null &&
+      dynstrOffset !== null &&
+      dynstrSize !== null &&
+      dynamicOffset + dynamicSize <= buffer.length &&
+      dynstrOffset + dynstrSize <= buffer.length
+    ) {
+      const dynstr = buffer.subarray(dynstrOffset, dynstrOffset + dynstrSize);
+      const entrySize = Math.max(is64 ? 16 : 8, toSafeNumber(dynamicSection.entrySize) || 0);
+      for (let offset = dynamicOffset; offset + entrySize <= dynamicOffset + dynamicSize; offset += entrySize) {
+        const tag = is64 ? readBigUIntValue(buffer, offset, littleEndian) : BigInt(readWord(offset, 4));
+        const value = is64 ? readBigUIntValue(buffer, offset + 8, littleEndian) : BigInt(readWord(offset + 4, 4));
+        if (tag === 0n) {
+          break;
+        }
+        const stringOffset = toSafeNumber(value);
+        if (stringOffset === null || stringOffset >= dynstr.length) {
+          continue;
+        }
+        const text = readCString(dynstr, stringOffset, 256);
+        if (!text) {
+          continue;
+        }
+        if (tag === 1n) {
+          neededLibraries.push(text);
+        } else if (tag === 14n) {
+          soname = text;
+        } else if (tag === 15n || tag === 29n) {
+          runpath = text;
+        }
+      }
+    }
+  }
+
+  let commentPreview = [];
+  const commentSection = sections.find((section) => section.name === ".comment");
+  if (commentSection) {
+    const commentOffset = toSafeNumber(commentSection.offset);
+    const commentSize = toSafeNumber(commentSection.size);
+    if (commentOffset !== null && commentSize !== null && commentOffset + commentSize <= buffer.length) {
+      commentPreview = extractPrintableSegments(buffer.subarray(commentOffset, commentOffset + commentSize).toString("latin1"), 4, 12);
+    }
+  }
+
+  const symbolTables = [];
+  const symbolNameMaps = new Map();
+  sections
+    .filter((section) => section.type === 2 || section.type === 11)
+    .forEach((section) => {
+      const table = parseElfSymbolSection(buffer, sections, section, littleEndian, is64);
+      if (table) {
+        symbolTables.push(table);
+        symbolNameMaps.set(section.index, table.namesByIndex);
+      }
+    });
+
+  const relocations = sections
+    .filter((section) => section.type === 4 || section.type === 9)
+    .map((section) => parseElfRelocationSection(buffer, sections, section, littleEndian, is64, symbolNameMaps))
+    .filter(Boolean);
+
+  return {
+    format: is64 ? "ELF64" : "ELF32",
+    endian: littleEndian ? "LE" : "BE",
+    type: getElfTypeLabel(type),
+    machine: getElfMachineLabel(machine),
+    entry,
+    interpreter,
+    sections: sections.slice(0, 64).map((section) => ({
+      name: section.name,
+      type: section.type,
+      offset: section.offset,
+      size: section.size,
+    })),
+    neededLibraries: dedupeStrings(neededLibraries).slice(0, 24),
+    runpath,
+    soname,
+    commentPreview,
+    symbolTables: symbolTables.map((table) => ({
+      name: table.name,
+      count: table.count,
+      functions: table.functions,
+      globals: table.globals,
+      objects: table.objects,
+    })),
+    relocations,
+  };
+}
+
+function buildElfSummaryText(fileName, report) {
+  const lines = [`# ELF SUMMARY`, `file: ${fileName}`, ""];
+  lines.push(`format: ${report.format}`);
+  lines.push(`endian: ${report.endian}`);
+  lines.push(`type: ${report.type}`);
+  lines.push(`machine: ${report.machine}`);
+  lines.push(`entry: ${formatHex(report.entry)}`);
+  lines.push("");
+  if (report.interpreter) {
+    lines.push("# INTERPRETER");
+    lines.push(report.interpreter);
+    lines.push("");
+  }
+  if (report.neededLibraries.length) {
+    lines.push("# NEEDED");
+    report.neededLibraries.forEach((item) => lines.push(item));
+    lines.push("");
+  }
+  if (report.soname || report.runpath) {
+    lines.push("# DYNAMIC");
+    if (report.soname) {
+      lines.push(`soname: ${report.soname}`);
+    }
+    if (report.runpath) {
+      lines.push(`runpath: ${report.runpath}`);
+    }
+    lines.push("");
+  }
+  if (report.commentPreview.length) {
+    lines.push("# COMMENT");
+    report.commentPreview.forEach((item) => lines.push(item));
+    lines.push("");
+  }
+  if (report.symbolTables.length) {
+    lines.push("# SYMBOLS");
+    report.symbolTables.forEach((table) => {
+      lines.push(`${table.name} count=${table.count}`);
+      if (table.functions.length) {
+        lines.push(`functions: ${table.functions.join(", ")}`);
+      }
+      if (table.globals.length) {
+        lines.push(`globals: ${table.globals.join(", ")}`);
+      }
+      if (table.objects.length) {
+        lines.push(`objects: ${table.objects.join(", ")}`);
+      }
+      lines.push("");
+    });
+  }
+  if (report.relocations.length) {
+    lines.push("# RELOCATIONS");
+    report.relocations.forEach((entry) => {
+      lines.push(`${entry.name} target=${entry.target || "?"} count=${entry.count}`);
+      if (entry.symbols.length) {
+        lines.push(`symbols: ${entry.symbols.join(", ")}`);
+      }
+      lines.push("");
+    });
+  }
+  if (report.sections.length) {
+    lines.push("# SECTIONS");
+    report.sections.forEach((section) => {
+      lines.push(`${section.name} type=${section.type} offset=${formatHex(section.offset)} size=${formatHex(section.size)}`);
+    });
+    lines.push("");
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function getPeMachineLabel(machine) {
+  const labels = {
+    0x14c: "x86",
+    0x1c0: "ARM",
+    0x1c4: "ARMv7",
+    0x8664: "x86-64",
+    0xaa64: "ARM64",
+  };
+  return labels[machine] || `MACHINE-${machine}`;
+}
+
+function getPeSubsystemLabel(subsystem) {
+  const labels = {
+    1: "Native",
+    2: "Windows GUI",
+    3: "Windows CUI",
+    5: "OS/2 CUI",
+    7: "POSIX CUI",
+    9: "Windows CE",
+    10: "EFI Application",
+    14: "Xbox",
+    16: "Boot",
+  };
+  return labels[subsystem] || `SUBSYSTEM-${subsystem}`;
+}
+
+function peRvaToOffset(rva, sections, sizeOfHeaders = 0) {
+  if (!rva) {
+    return null;
+  }
+  if (rva < sizeOfHeaders) {
+    return rva;
+  }
+  for (const section of sections) {
+    const start = section.virtualAddress;
+    const end = start + Math.max(section.virtualSize, section.rawSize);
+    if (rva >= start && rva < end) {
+      return section.rawOffset + (rva - start);
+    }
+  }
+  return null;
+}
+
+function parsePeBinary(buffer) {
+  if (detectMagic(buffer) !== "pe" || buffer.length < 0x40) {
+    return null;
+  }
+
+  const peOffset = buffer.readUInt32LE(0x3c);
+  if (peOffset <= 0 || peOffset + 24 > buffer.length || buffer.subarray(peOffset, peOffset + 4).toString("ascii") !== "PE\u0000\u0000") {
+    return null;
+  }
+
+  const coffOffset = peOffset + 4;
+  const machine = buffer.readUInt16LE(coffOffset);
+  const numberOfSections = buffer.readUInt16LE(coffOffset + 2);
+  const timestamp = buffer.readUInt32LE(coffOffset + 4);
+  const optionalHeaderSize = buffer.readUInt16LE(coffOffset + 16);
+  const optionalOffset = coffOffset + 20;
+  if (optionalOffset + optionalHeaderSize > buffer.length || optionalHeaderSize < 96) {
+    return null;
+  }
+
+  const optionalMagic = buffer.readUInt16LE(optionalOffset);
+  const is64 = optionalMagic === 0x20b;
+  const entryPointRva = buffer.readUInt32LE(optionalOffset + 16);
+  const imageBase = is64 ? buffer.readBigUInt64LE(optionalOffset + 24) : BigInt(buffer.readUInt32LE(optionalOffset + 28));
+  const subsystem = buffer.readUInt16LE(optionalOffset + 68);
+  const sizeOfHeaders = buffer.readUInt32LE(optionalOffset + 60);
+  const dataDirectoryOffset = optionalOffset + (is64 ? 112 : 96);
+  const sectionOffset = optionalOffset + optionalHeaderSize;
+
+  const sections = [];
+  for (let index = 0; index < Math.min(numberOfSections, 96); index += 1) {
+    const offset = sectionOffset + index * 40;
+    if (offset + 40 > buffer.length) {
+      break;
+    }
+    const name = buffer.subarray(offset, offset + 8).toString("latin1").replace(/\0/g, "").trim() || `section_${index}`;
+    sections.push({
+      name,
+      virtualSize: buffer.readUInt32LE(offset + 8),
+      virtualAddress: buffer.readUInt32LE(offset + 12),
+      rawSize: buffer.readUInt32LE(offset + 16),
+      rawOffset: buffer.readUInt32LE(offset + 20),
+      characteristics: buffer.readUInt32LE(offset + 36),
+    });
+  }
+
+  const importedLibraries = [];
+  const importedFunctions = [];
+  if (dataDirectoryOffset + 16 <= buffer.length) {
+    const importRva = buffer.readUInt32LE(dataDirectoryOffset + 8);
+    const importOffset = peRvaToOffset(importRva, sections, sizeOfHeaders);
+    const thunkSize = is64 ? 8 : 4;
+    if (importOffset !== null) {
+      for (let index = 0; index < 128; index += 1) {
+        const offset = importOffset + index * 20;
+        if (offset + 20 > buffer.length) {
+          break;
+        }
+        const originalFirstThunk = buffer.readUInt32LE(offset);
+        const nameRva = buffer.readUInt32LE(offset + 12);
+        const firstThunk = buffer.readUInt32LE(offset + 16);
+        if (!originalFirstThunk && !nameRva && !firstThunk) {
+          break;
+        }
+
+        const nameOffset = peRvaToOffset(nameRva, sections, sizeOfHeaders);
+        const libraryName = nameOffset !== null ? readCString(buffer, nameOffset, 128) : `import_${index + 1}`;
+        const thunkRva = originalFirstThunk || firstThunk;
+        let thunkOffset = peRvaToOffset(thunkRva, sections, sizeOfHeaders);
+        const functions = [];
+        for (let thunkIndex = 0; thunkOffset !== null && thunkIndex < 96 && thunkOffset + thunkSize <= buffer.length; thunkIndex += 1, thunkOffset += thunkSize) {
+          const thunkValue = is64 ? buffer.readBigUInt64LE(thunkOffset) : BigInt(buffer.readUInt32LE(thunkOffset));
+          if (thunkValue === 0n) {
+            break;
+          }
+          const ordinalFlag = is64 ? 0x8000000000000000n : 0x80000000n;
+          if ((thunkValue & ordinalFlag) !== 0n) {
+            const ordinal = Number(thunkValue & 0xffffn);
+            functions.push(`ordinal:${ordinal}`);
+            continue;
+          }
+          const functionNameOffset = peRvaToOffset(Number(thunkValue), sections, sizeOfHeaders);
+          if (functionNameOffset === null || functionNameOffset + 2 > buffer.length) {
+            continue;
+          }
+          const functionName = readCString(buffer, functionNameOffset + 2, 128);
+          if (functionName) {
+            functions.push(functionName);
+            importedFunctions.push(`${libraryName}!${functionName}`);
+          }
+        }
+        importedLibraries.push({
+          name: libraryName,
+          functions: dedupeStrings(functions).slice(0, 32),
+        });
+      }
+    }
+  }
+
+  let exportName = "";
+  const exportedFunctions = [];
+  if (dataDirectoryOffset + 8 <= buffer.length) {
+    const exportRva = buffer.readUInt32LE(dataDirectoryOffset);
+    const exportOffset = peRvaToOffset(exportRva, sections, sizeOfHeaders);
+    if (exportOffset !== null && exportOffset + 40 <= buffer.length) {
+      const nameRva = buffer.readUInt32LE(exportOffset + 12);
+      const ordinalBase = buffer.readUInt32LE(exportOffset + 16);
+      const numberOfFunctions = buffer.readUInt32LE(exportOffset + 20);
+      const numberOfNames = buffer.readUInt32LE(exportOffset + 24);
+      const addressOfNames = buffer.readUInt32LE(exportOffset + 32);
+      const addressOfNameOrdinals = buffer.readUInt32LE(exportOffset + 36);
+      const exportNameOffset = peRvaToOffset(nameRva, sections, sizeOfHeaders);
+      if (exportNameOffset !== null) {
+        exportName = readCString(buffer, exportNameOffset, 256);
+      }
+      const namesOffset = peRvaToOffset(addressOfNames, sections, sizeOfHeaders);
+      const ordinalsOffset = peRvaToOffset(addressOfNameOrdinals, sections, sizeOfHeaders);
+      if (namesOffset !== null && ordinalsOffset !== null) {
+        const maxNames = Math.min(numberOfNames, numberOfFunctions, 160);
+        for (let index = 0; index < maxNames; index += 1) {
+          const namePtrOffset = namesOffset + index * 4;
+          const ordinalPtrOffset = ordinalsOffset + index * 2;
+          if (namePtrOffset + 4 > buffer.length || ordinalPtrOffset + 2 > buffer.length) {
+            break;
+          }
+          const functionNameRva = buffer.readUInt32LE(namePtrOffset);
+          const functionNameOffset = peRvaToOffset(functionNameRva, sections, sizeOfHeaders);
+          if (functionNameOffset === null) {
+            continue;
+          }
+          const functionName = readCString(buffer, functionNameOffset, 160);
+          if (!functionName) {
+            continue;
+          }
+          const ordinal = ordinalBase + buffer.readUInt16LE(ordinalPtrOffset);
+          exportedFunctions.push(`${functionName} @${ordinal}`);
+        }
+      }
+    }
+  }
+
+  const cliDirectoryOffset = dataDirectoryOffset + 14 * 8;
+  const dotNet = cliDirectoryOffset + 8 <= buffer.length && buffer.readUInt32LE(cliDirectoryOffset) !== 0;
+
+  return {
+    format: is64 ? "PE32+" : "PE32",
+    machine: getPeMachineLabel(machine),
+    timestamp,
+    timestampIso: formatUnixTimestamp(timestamp),
+    subsystem: getPeSubsystemLabel(subsystem),
+    entryPointRva,
+    imageBase,
+    sections,
+    importedLibraries,
+    importedFunctions: dedupeStrings(importedFunctions).slice(0, 120),
+    exportName,
+    exportedFunctions: dedupeStrings(exportedFunctions).slice(0, 160),
+    dotNet,
+  };
+}
+
+function buildPeSummaryText(fileName, report) {
+  const lines = [`# PE SUMMARY`, `file: ${fileName}`, ""];
+  lines.push(`format: ${report.format}`);
+  lines.push(`machine: ${report.machine}`);
+  lines.push(`subsystem: ${report.subsystem}`);
+  lines.push(`entryPointRva: ${formatHex(report.entryPointRva)}`);
+  lines.push(`imageBase: ${formatHex(report.imageBase)}`);
+  if (report.timestampIso) {
+    lines.push(`timestamp: ${report.timestampIso}`);
+  }
+  if (report.dotNet) {
+    lines.push(`dotNet: true`);
+  }
+  lines.push("");
+  if (report.importedLibraries.length) {
+    lines.push("# IMPORTS");
+    report.importedLibraries.forEach((library) => {
+      lines.push(`${library.name}${library.functions.length ? ` => ${library.functions.join(", ")}` : ""}`);
+    });
+    lines.push("");
+  }
+  if (report.exportedFunctions.length) {
+    lines.push("# EXPORTS");
+    if (report.exportName) {
+      lines.push(`library: ${report.exportName}`);
+    }
+    report.exportedFunctions.forEach((item) => lines.push(item));
+    lines.push("");
+  }
+  if (report.sections.length) {
+    lines.push("# SECTIONS");
+    report.sections.forEach((section) => {
+      lines.push(
+        `${section.name} va=${formatHex(section.virtualAddress)} raw=${formatHex(section.rawOffset)} size=${formatHex(section.rawSize)} flags=${formatHex(section.characteristics)}`,
+      );
+    });
+    lines.push("");
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function looksLikeJavaPackageName(value) {
+  return /^(?:[A-Za-z][\w$]*\.){1,}[A-Za-z][\w$]*$/.test(value);
+}
+
+function readDexUleb128(buffer, offset) {
+  let result = 0;
+  let shift = 0;
+  let cursor = offset;
+  while (cursor < buffer.length && shift <= 28) {
+    const byte = buffer[cursor];
+    result |= (byte & 0x7f) << shift;
+    cursor += 1;
+    if ((byte & 0x80) === 0) {
+      return { value: result >>> 0, nextOffset: cursor };
+    }
+    shift += 7;
+  }
+  return { value: 0, nextOffset: offset };
+}
+
+function readAndroidLength8(buffer, offset) {
+  if (offset >= buffer.length) {
+    return { value: 0, nextOffset: offset };
+  }
+  const first = buffer[offset];
+  if ((first & 0x80) === 0) {
+    return { value: first, nextOffset: offset + 1 };
+  }
+  if (offset + 1 >= buffer.length) {
+    return { value: first & 0x7f, nextOffset: buffer.length };
+  }
+  return { value: ((first & 0x7f) << 8) | buffer[offset + 1], nextOffset: offset + 2 };
+}
+
+function readAndroidLength16(buffer, offset) {
+  if (offset + 2 > buffer.length) {
+    return { value: 0, nextOffset: offset };
+  }
+  const first = buffer.readUInt16LE(offset);
+  if ((first & 0x8000) === 0) {
+    return { value: first, nextOffset: offset + 2 };
+  }
+  if (offset + 4 > buffer.length) {
+    return { value: first & 0x7fff, nextOffset: buffer.length };
+  }
+  const second = buffer.readUInt16LE(offset + 2);
+  return { value: ((first & 0x7fff) << 16) | second, nextOffset: offset + 4 };
+}
+
+function parseAndroidStringPoolChunk(buffer, chunkOffset) {
+  if (chunkOffset + 28 > buffer.length) {
+    return [];
+  }
+  const chunkType = buffer.readUInt16LE(chunkOffset);
+  const headerSize = buffer.readUInt16LE(chunkOffset + 2);
+  const chunkSize = buffer.readUInt32LE(chunkOffset + 4);
+  if (chunkType !== 0x0001 || headerSize < 28 || chunkSize <= headerSize || chunkOffset + chunkSize > buffer.length) {
+    return [];
+  }
+
+  const stringCount = buffer.readUInt32LE(chunkOffset + 8);
+  const flags = buffer.readUInt32LE(chunkOffset + 16);
+  const stringsStart = buffer.readUInt32LE(chunkOffset + 20);
+  if (!stringCount || stringCount > 4096) {
+    return [];
+  }
+
+  const utf8 = (flags & 0x00000100) !== 0;
+  const offsetsStart = chunkOffset + headerSize;
+  const dataStart = chunkOffset + stringsStart;
+  const values = [];
+
+  for (let index = 0; index < stringCount; index += 1) {
+    const entryOffset = offsetsStart + index * 4;
+    if (entryOffset + 4 > chunkOffset + chunkSize) {
+      break;
+    }
+    const relative = buffer.readUInt32LE(entryOffset);
+    let stringOffset = dataStart + relative;
+    if (stringOffset < dataStart || stringOffset >= chunkOffset + chunkSize) {
+      continue;
+    }
+
+    let text = "";
+    if (utf8) {
+      const skippedUtf16 = readAndroidLength8(buffer, stringOffset);
+      const byteLengthInfo = readAndroidLength8(buffer, skippedUtf16.nextOffset);
+      stringOffset = byteLengthInfo.nextOffset;
+      const byteEnd = Math.min(chunkOffset + chunkSize, stringOffset + byteLengthInfo.value);
+      text = buffer.subarray(stringOffset, byteEnd).toString("utf8");
+    } else {
+      const charLengthInfo = readAndroidLength16(buffer, stringOffset);
+      stringOffset = charLengthInfo.nextOffset;
+      const byteEnd = Math.min(chunkOffset + chunkSize, stringOffset + charLengthInfo.value * 2);
+      text = buffer.subarray(stringOffset, byteEnd).toString("utf16le");
+    }
+
+    text = text.replace(/\0/g, "").trim();
+    if (text) {
+      values.push(text);
+    }
+  }
+
+  return dedupeStrings(values);
+}
+
+function extractAndroidStringPools(buffer) {
+  const collected = [];
+  for (let offset = 0; offset + 28 <= buffer.length; offset += 4) {
+    if (buffer.readUInt16LE(offset) !== 0x0001) {
+      continue;
+    }
+    const headerSize = buffer.readUInt16LE(offset + 2);
+    const chunkSize = buffer.readUInt32LE(offset + 4);
+    if (headerSize < 28 || chunkSize <= headerSize || offset + chunkSize > buffer.length) {
+      continue;
+    }
+    parseAndroidStringPoolChunk(buffer, offset).forEach((item) => collected.push(item));
+  }
+  return dedupeStrings(collected);
+}
+
+function parseDexBuffer(buffer) {
+  if (buffer.length < 112 || (!buffer.subarray(0, 4).equals(Buffer.from("dex\n")) && !buffer.subarray(0, 4).equals(Buffer.from("cdex")))) {
+    return null;
+  }
+
+  const stringIdsSize = buffer.readUInt32LE(56);
+  const stringIdsOffset = buffer.readUInt32LE(60);
+  const typeIdsSize = buffer.readUInt32LE(64);
+  const typeIdsOffset = buffer.readUInt32LE(68);
+  const methodIdsSize = buffer.readUInt32LE(88);
+  const methodIdsOffset = buffer.readUInt32LE(92);
+  if (
+    stringIdsOffset + stringIdsSize * 4 > buffer.length ||
+    typeIdsOffset + typeIdsSize * 4 > buffer.length ||
+    methodIdsOffset + methodIdsSize * 8 > buffer.length
+  ) {
+    return null;
+  }
+
+  const strings = [];
+  for (let index = 0; index < Math.min(stringIdsSize, 4096); index += 1) {
+    const dataOffset = buffer.readUInt32LE(stringIdsOffset + index * 4);
+    if (!dataOffset || dataOffset >= buffer.length) {
+      strings.push("");
+      continue;
+    }
+    const lengthInfo = readDexUleb128(buffer, dataOffset);
+    let cursor = lengthInfo.nextOffset;
+    while (cursor < buffer.length && buffer[cursor] !== 0) {
+      cursor += 1;
+    }
+    strings.push(buffer.subarray(lengthInfo.nextOffset, cursor).toString("utf8").replace(/\0/g, ""));
+  }
+
+  const typeDescriptors = [];
+  for (let index = 0; index < Math.min(typeIdsSize, 4096); index += 1) {
+    const descriptorIndex = buffer.readUInt32LE(typeIdsOffset + index * 4);
+    typeDescriptors.push(strings[descriptorIndex] || "");
+  }
+
+  const methods = [];
+  for (let index = 0; index < Math.min(methodIdsSize, 512); index += 1) {
+    const offset = methodIdsOffset + index * 8;
+    const classIndex = buffer.readUInt16LE(offset);
+    const nameIndex = buffer.readUInt32LE(offset + 4);
+    const classDescriptor = typeDescriptors[classIndex] || "";
+    const methodName = strings[nameIndex] || "";
+    if (!methodName) {
+      continue;
+    }
+    methods.push(`${classDescriptor || "?"} -> ${methodName}`);
+  }
+
+  return {
+    stringCount: stringIdsSize,
+    typeCount: typeIdsSize,
+    methodCount: methodIdsSize,
+    classDescriptors: dedupeStrings(
+      typeDescriptors.filter((item) => /^L[^;]+;$/.test(item)).map((item) => item.replace(/^L/, "").replace(/;$/, "").replace(/\//g, ".")),
+    ).slice(0, 160),
+    methods: dedupeStrings(methods).slice(0, 160),
+    strings: dedupeStrings(strings.filter((item) => item && (looksLikeJavaPackageName(item) || /^https?:\/\//i.test(item) || KNOWN_FLAG_PREFIX.test(item)))).slice(0, 160),
+  };
+}
+
+function parseApkPackage(filePath) {
+  const zip = new AdmZip(filePath);
+  const entries = zip.getEntries().filter((entry) => !entry.isDirectory);
+  if (!entries.length) {
+    return null;
+  }
+
+  const manifestEntry = entries.find((entry) => entry.entryName === "AndroidManifest.xml");
+  const manifestBuffer = manifestEntry ? manifestEntry.getData() : Buffer.alloc(0);
+  const manifestStrings = manifestBuffer.length
+    ? dedupeStrings(
+        extractAndroidStringPools(manifestBuffer).concat(extractAsciiStrings(manifestBuffer, 4, 600), extractUnicodeStrings(manifestBuffer, 4, 400)),
+      )
+    : [];
+  const manifestText = manifestStrings.join("\n");
+  const permissions = dedupeStrings(
+    Array.from(manifestText.matchAll(/\b(?:android|com(?:\.[A-Za-z0-9_]+)+)\.permission\.[A-Za-z0-9_.]+\b/g)).map((match) => match[0]),
+  ).slice(0, 32);
+  const packageNames = dedupeStrings(
+    Array.from(manifestText.matchAll(/\b(?:[A-Za-z][\w$]*\.){1,}[A-Za-z][\w$]*\b/g))
+      .map((match) => match[0])
+      .filter(
+        (item) =>
+          looksLikeJavaPackageName(item) &&
+          !item.startsWith("android.") &&
+          !item.startsWith("androidx.") &&
+          !item.startsWith("java.") &&
+          !/(Activity|Service|Receiver|Provider)$/.test(item),
+      ),
+  ).slice(0, 24);
+  const components = dedupeStrings(
+    Array.from(manifestText.matchAll(/\b(?:[A-Za-z][\w$]*\.)*[A-Za-z][\w$]*(?:Activity|Service|Receiver|Provider)\b/g)).map((match) => match[0]),
+  ).slice(0, 24);
+  const dexEntries = entries.filter((entry) => /(^|\/)classes\d*\.dex$/i.test(entry.entryName));
+  const dexStrings = [];
+  const dexMethods = [];
+  const dexClasses = [];
+  dexEntries.slice(0, 3).forEach((entry) => {
+    const content = entry.getData();
+    const parsedDex = parseDexBuffer(content);
+    if (parsedDex) {
+      parsedDex.strings.slice(0, 100).forEach((item) => dexStrings.push(item));
+      parsedDex.methods.slice(0, 120).forEach((item) => dexMethods.push(item));
+      parsedDex.classDescriptors.slice(0, 120).forEach((item) => dexClasses.push(item));
+      return;
+    }
+    const strings = dedupeStrings(extractAsciiStrings(content, 6, 500).concat(extractUnicodeStrings(content, 6, 200)));
+    strings
+      .filter((item) => looksLikeJavaPackageName(item) || /^https?:\/\//i.test(item) || KNOWN_FLAG_PREFIX.test(item))
+      .slice(0, 80)
+      .forEach((item) => dexStrings.push(item));
+  });
+
+  const resourceEntry = entries.find((entry) => entry.entryName === "resources.arsc");
+  const resourceStrings = resourceEntry ? extractAndroidStringPools(resourceEntry.getData()).slice(0, 200) : [];
+
+  const nativeAbis = dedupeStrings(
+    entries.map((entry) => {
+      const match = /^lib\/([^/]+)\//i.exec(entry.entryName);
+      return match ? match[1] : "";
+    }),
+  ).filter(Boolean);
+
+  return {
+    entryCount: entries.length,
+    dexEntries: dexEntries.map((entry) => entry.entryName),
+    assetCount: entries.filter((entry) => /^assets\//i.test(entry.entryName)).length,
+    metaCount: entries.filter((entry) => /^META-INF\//i.test(entry.entryName)).length,
+    nativeAbis,
+    packageNames,
+    permissions,
+    components,
+    manifestStrings: manifestStrings.slice(0, 120),
+    dexStrings: dedupeStrings(dexStrings).slice(0, 120),
+    dexMethods: dedupeStrings(dexMethods).slice(0, 160),
+    dexClasses: dedupeStrings(dexClasses).slice(0, 120),
+    resourceStrings,
+  };
+}
+
+function buildApkSummaryText(fileName, report) {
+  const lines = [`# APK SUMMARY`, `file: ${fileName}`, ""];
+  lines.push(`entries: ${report.entryCount}`);
+  lines.push(`dexFiles: ${report.dexEntries.length}`);
+  lines.push(`assets: ${report.assetCount}`);
+  lines.push(`metaInf: ${report.metaCount}`);
+  if (report.nativeAbis.length) {
+    lines.push(`abis: ${report.nativeAbis.join(", ")}`);
+  }
+  lines.push("");
+  if (report.packageNames.length) {
+    lines.push("# PACKAGE");
+    report.packageNames.forEach((item) => lines.push(item));
+    lines.push("");
+  }
+  if (report.permissions.length) {
+    lines.push("# PERMISSIONS");
+    report.permissions.forEach((item) => lines.push(item));
+    lines.push("");
+  }
+  if (report.components.length) {
+    lines.push("# COMPONENTS");
+    report.components.forEach((item) => lines.push(item));
+    lines.push("");
+  }
+  if (report.dexEntries.length) {
+    lines.push("# DEX");
+    report.dexEntries.forEach((item) => lines.push(item));
+    lines.push("");
+  }
+  if (report.dexClasses.length) {
+    lines.push("# DEX CLASSES");
+    report.dexClasses.forEach((item) => lines.push(item));
+    lines.push("");
+  }
+  if (report.dexMethods.length) {
+    lines.push("# DEX METHODS");
+    report.dexMethods.forEach((item) => lines.push(item));
+    lines.push("");
+  }
+  if (report.dexStrings.length) {
+    lines.push("# DEX STRINGS");
+    report.dexStrings.forEach((item) => lines.push(item));
+    lines.push("");
+  }
+  if (report.resourceStrings.length) {
+    lines.push("# RESOURCES");
+    report.resourceStrings.forEach((item) => lines.push(item));
+    lines.push("");
+  }
+  if (report.manifestStrings.length) {
+    lines.push("# MANIFEST STRINGS");
+    report.manifestStrings.forEach((item) => lines.push(item));
+    lines.push("");
+  }
+  return `${lines.join("\n")}\n`;
+}
+
 async function buildArtifactSignals(filePath) {
   const extension = path.extname(filePath).toLowerCase();
   const sampleLimit =
@@ -2147,6 +3694,7 @@ async function buildArtifactSignals(filePath) {
     keywords: [],
     flagCandidates: [],
     actions: [],
+    toolActions: [],
     embeddedPayloads: [],
   };
 
@@ -2171,17 +3719,21 @@ async function buildArtifactSignals(filePath) {
 
   const lowered = normalizeText(searchableText);
   let embeddedPayloads = detectEmbeddedPayloads(buffer, artifact.family === "image" ? 128 : 64).filter((item) => item.offset > 0);
-  if ((artifact.family === "archive" && artifact.badge === "ZIP") || isOfficePackageExtension(extension)) {
+  if ((artifact.family === "archive" && artifact.badge === "ZIP") || isOfficePackageExtension(extension) || artifact.badge === "APK") {
     embeddedPayloads = embeddedPayloads.filter((item) => item.id !== "zip");
   }
   artifact.embeddedPayloads = embeddedPayloads;
   const trafficSummary = artifact.family === "network" ? analyzeTrafficBuffer(buffer) : null;
   const pdfReport = artifact.badge === "PDF" ? analyzePdfBuffer(buffer) : null;
+  let elfReport = null;
+  let peReport = null;
+  let apkReport = null;
   let imageRaster = null;
   let qrPayload = null;
   let barcodePayload = null;
   let wavInfo = null;
   let audioLSB = [];
+  let audioSignal = null;
   if (artifact.family === "image") {
     try {
       imageRaster = decodeImageRaster(buffer);
@@ -2197,9 +3749,26 @@ async function buildArtifactSignals(filePath) {
     try {
       wavInfo = parseWavBuffer(buffer);
       audioLSB = wavInfo ? collectAudioLSBCandidates(buffer, wavInfo) : [];
+      audioSignal = wavInfo ? analyzeWavSignal(buffer, wavInfo, { maxSamples: MAX_AUDIO_PREVIEW_SAMPLES }) : null;
     } catch (_error) {
       wavInfo = null;
       audioLSB = [];
+      audioSignal = null;
+    }
+  }
+  if (artifact.family === "binary") {
+    try {
+      if (artifact.badge === "ELF" || extension === ".elf" || extension === ".so") {
+        elfReport = parseElfBinary(buffer);
+      } else if (artifact.badge === "PE" || [".exe", ".dll"].includes(extension)) {
+        peReport = parsePeBinary(buffer);
+      } else if (artifact.badge === "APK" || extension === ".apk") {
+        apkReport = parseApkPackage(filePath);
+      }
+    } catch (_error) {
+      elfReport = null;
+      peReport = null;
+      apkReport = null;
     }
   }
 
@@ -2325,6 +3894,30 @@ async function buildArtifactSignals(filePath) {
       if (audioLSB.length) {
         artifact.highlights.push(`WAV LSB \u547d\u4e2d ${audioLSB.length} \u7ec4\u53ef\u8bfb\u7ebf\u7d22\u3002`);
       }
+      if (audioSignal && audioSignal.activeSegments.length) {
+        artifact.highlights.push(`\u97f3\u9891\u6d3b\u52a8\u6bb5 ${audioSignal.activeSegments.length} \u6bb5\u3002`);
+      }
+      if (audioSignal && audioSignal.dominantFrequencies.length) {
+        artifact.highlights.push(
+          `\u4e3b\u9891\u6bb5\u7ea6 ${audioSignal.dominantFrequencies.map((item) => `${Math.round(item.frequencyHz)}Hz`).join(" / ")}`,
+        );
+      }
+      if (audioSignal && audioSignal.morseCandidates.length) {
+        artifact.highlights.push(`\u68c0\u6d4b\u5230 Morse \u5019\u9009\uff1a${audioSignal.morseCandidates[0].text}`);
+        artifact.keywords.push("morse", "tone");
+        artifact.flagCandidates = dedupeStrings(
+          artifact.flagCandidates
+            .map((item) => `${item.value}@@${item.source}`)
+            .concat(
+              audioSignal.morseCandidates.flatMap((item) =>
+                findFlagCandidates(item.text, `${artifact.name} (MORSE)`).map((flag) => `${flag.value}@@${flag.source}`),
+              ),
+            ),
+        ).map((entry) => {
+          const [value, source] = entry.split("@@");
+          return { value, source };
+        });
+      }
       artifact.actions.push({
         id: "extract-audio-clues",
         label: "\u63d0\u53d6\u97f3\u9891\u7ebf\u7d22",
@@ -2338,7 +3931,7 @@ async function buildArtifactSignals(filePath) {
       id: "extract-strings",
       label: "\u5bfc\u51fa strings",
     });
-    artifact.suggestions.push("\u5148\u770b fmt/data/LIST \u5757\uff0c\u518d\u62bd strings\u3001LSB \u5019\u9009\u548c\u6ce2\u5f62\u56fe\u3002");
+    artifact.suggestions.push("\u5148\u770b fmt/data/LIST \u5757\uff0c\u518d\u62bd strings\u3001LSB\u3001\u4e3b\u9891\u6bb5\u548c\u9891\u8c31/\u6ce2\u5f62\u56fe\u3002");
   } else if (artifact.family === "network") {
     artifact.summary = "\u6d41\u91cf\u7c7b\u9644\u4ef6\uff0c\u4f18\u5148\u6309 HTTP\u3001DNS\u3001TLS \u548c TCP \u4f1a\u8bdd\u8fd8\u539f\u7ebf\u7d22\u3002";
     artifact.keywords.push("pcap", "traffic", "network");
@@ -2399,9 +3992,86 @@ async function buildArtifactSignals(filePath) {
     artifact.summary = "\u4e8c\u8fdb\u5236\u7c7b\u9644\u4ef6\uff0c\u53ef\u4ece strings\u3001\u5bfc\u5165\u8868\u3001\u6821\u9a8c\u5b57\u7b26\u4e32\u548c\u63a7\u5236\u6d41\u5207\u5165\u3002";
     artifact.keywords.push("binary");
     const unicodeStrings = extractUnicodeStrings(buffer, 4, 120);
-    if (artifact.badge === "ELF" || extension === ".elf") {
+    if (artifact.badge === "APK" || extension === ".apk") {
+      artifact.summary = "\u5b89\u5353 APK \u5305\uff0c\u53ef\u4ece Manifest\u3001DEX\u3001\u6743\u9650\u3001native lib \u548c\u5185\u5d4c\u8d44\u6e90\u5207\u5165\u3002";
+      artifact.keywords.push("apk", "android", "mobile");
+      artifact.highlights.push(`APK \u5305\u4f53\uff0c\u5305\u542b ${apkReport ? apkReport.entryCount : "?"} \u4e2a\u6587\u4ef6\u6761\u76ee\u3002`);
+      if (apkReport && apkReport.dexEntries.length) {
+        artifact.highlights.push(`DEX ${apkReport.dexEntries.length} \u4e2a\uff0c\u9002\u5408\u7ee7\u7eed\u5206\u6790 classes \u4e0e\u5b57\u7b26\u4e32\u6c60\u3002`);
+      }
+      if (apkReport && apkReport.dexMethods.length) {
+        artifact.highlights.push(`DEX \u65b9\u6cd5\u7d22\u5f15 ${apkReport.dexMethods.length} \u6761\u3002`);
+      }
+      if (apkReport && apkReport.permissions.length) {
+        artifact.highlights.push(`Manifest \u6743\u9650 ${apkReport.permissions.length} \u6761\u3002`);
+      }
+      if (apkReport && apkReport.resourceStrings.length) {
+        artifact.highlights.push(`resources.arsc \u5b57\u7b26\u4e32 ${apkReport.resourceStrings.length} \u6761\u3002`);
+      }
+      if (apkReport && apkReport.nativeAbis.length) {
+        artifact.highlights.push(`Native ABI\uff1a${apkReport.nativeAbis.join(" / ")}`);
+      }
+      if (apkReport && apkReport.packageNames.length) {
+        artifact.highlights.push(`\u5305\u540d\u5019\u9009\uff1a${apkReport.packageNames[0]}`);
+      }
+      artifact.actions.push({
+        id: "extract-apk-package",
+        label: "\u62c6\u89e3 APK",
+      });
+      artifact.actions.push({
+        id: "extract-strings",
+        label: "\u5bfc\u51fa strings",
+      });
+      artifact.suggestions.push("\u5148\u770b AndroidManifest\u3001\u6743\u9650\u3001DEX \u5b57\u7b26\u4e32\u3001native lib \u548c assets \u8d44\u6e90\u3002");
+    } else if (artifact.badge === "ELF" || extension === ".elf" || extension === ".so") {
       artifact.highlights.push("ELF \u4e8c\u8fdb\u5236\uff0c\u504f\u5411\u9006\u5411\u6216 pwn \u6d41\u7a0b\u3002");
       artifact.keywords.push("elf", "reverse");
+      if (elfReport) {
+        artifact.highlights.push(`${elfReport.format} ${elfReport.machine} ${elfReport.type} entry ${formatHex(elfReport.entry)}`);
+        if (elfReport.interpreter) {
+          artifact.highlights.push(`\u52a8\u6001\u88c5\u8f7d\u5668\uff1a${elfReport.interpreter}`);
+        }
+        if (elfReport.neededLibraries.length) {
+          artifact.highlights.push(`\u4f9d\u8d56 so ${elfReport.neededLibraries.length} \u4e2a\u3002`);
+        }
+        if (elfReport.symbolTables.length || elfReport.relocations.length) {
+          const symbolCount = elfReport.symbolTables.reduce((sum, table) => sum + table.count, 0);
+          artifact.highlights.push(`ELF \u7b26\u53f7 ${symbolCount} \u4e2a\uff0c\u91cd\u5b9a\u4f4d\u6bb5 ${elfReport.relocations.length} \u4e2a\u3002`);
+        }
+      }
+      artifact.actions.push({
+        id: "extract-binary-clues",
+        label: "\u63d0\u53d6 ELF / PE \u7ebf\u7d22",
+      });
+      artifact.actions.push({
+        id: "extract-strings",
+        label: "\u5bfc\u51fa strings",
+      });
+      artifact.suggestions.push("\u5148\u770b ELF \u5934\u3001.interp\u3001.dynamic\u3001\u4f9d\u8d56 so \u548c\u53ef\u7591 section\u3002");
+    } else if (artifact.badge === "PE" || [".exe", ".dll"].includes(extension)) {
+      artifact.highlights.push("PE \u4e8c\u8fdb\u5236\uff0c\u53ef\u4ece section\u3001imports \u548c\u5b50\u7cfb\u7edf\u5207\u5165\u3002");
+      artifact.keywords.push("pe", "windows", "reverse");
+      if (peReport) {
+        artifact.highlights.push(`${peReport.format} ${peReport.machine} ${peReport.subsystem}`);
+        if (peReport.importedLibraries.length) {
+          artifact.highlights.push(`\u5bfc\u5165 DLL ${peReport.importedLibraries.length} \u4e2a\u3002`);
+        }
+        if (peReport.exportedFunctions.length) {
+          artifact.highlights.push(`\u5bfc\u51fa\u7b26\u53f7 ${peReport.exportedFunctions.length} \u4e2a\u3002`);
+        }
+        if (peReport.dotNet) {
+          artifact.highlights.push("\u68c0\u6d4b\u5230 .NET/CLI \u76ee\u5f55\u3002");
+        }
+      }
+      artifact.actions.push({
+        id: "extract-binary-clues",
+        label: "\u63d0\u53d6 ELF / PE \u7ebf\u7d22",
+      });
+      artifact.actions.push({
+        id: "extract-strings",
+        label: "\u5bfc\u51fa strings",
+      });
+      artifact.suggestions.push("\u5148\u770b PE \u53ef\u9009\u5934\u3001section\u3001imports\u3001\u65f6\u95f4\u6233\u548c\u662f\u5426 .NET\u3002");
     }
     if (unicodeStrings.length) {
       artifact.highlights.push(`\u63d0\u53d6\u5230 ${unicodeStrings.length} \u6761 UTF-16 \u5b57\u7b26\u4e32\u3002`);
@@ -2413,11 +4083,15 @@ async function buildArtifactSignals(filePath) {
     if (lowered.includes("flag") || lowered.includes("correct") || lowered.includes("wrong")) {
       artifact.highlights.push("strings \u91cc\u51fa\u73b0\u6821\u9a8c\u6216 flag \u76f8\u5173\u5b57\u7b26\u4e32\u3002");
     }
-    artifact.suggestions.push("\u5148 strings\uff0c\u518d\u67e5\u5bfc\u5165\u51fd\u6570\u3001\u6bd4\u8f83\u903b\u8f91\u548c flag \u751f\u6210\u8def\u5f84\u3002");
-    artifact.actions.push({
-      id: "extract-strings",
-      label: "\u5bfc\u51fa strings",
-    });
+    if (!artifact.suggestions.length) {
+      artifact.suggestions.push("\u5148 strings\uff0c\u518d\u67e5\u5bfc\u5165\u51fd\u6570\u3001\u6bd4\u8f83\u903b\u8f91\u548c flag \u751f\u6210\u8def\u5f84\u3002");
+    }
+    if (!artifact.actions.some((item) => item.id === "extract-strings")) {
+      artifact.actions.push({
+        id: "extract-strings",
+        label: "\u5bfc\u51fa strings",
+      });
+    }
   } else if (artifact.family === "text") {
     artifact.summary = "\u6587\u672c\u7c7b\u9644\u4ef6\uff0c\u4f18\u5148\u68c0\u67e5 flag \u6837\u5f0f\u3001base64\u3001hex\u3001URL \u548c\u9690\u85cf\u63d0\u793a\u3002";
     artifact.keywords.push("text");
@@ -2496,6 +4170,8 @@ async function buildArtifactSignals(filePath) {
     artifact.highlights.push(`\u53d1\u73b0 URL \u7ebf\u7d22 ${urls.length} \u6761\u3002`);
     artifact.keywords.push("http", "url");
   }
+
+  attachToolBackedActions(artifact);
 
   if (artifact.flagCandidates.length) {
     artifact.highlights.unshift(`\u53d1\u73b0 ${artifact.flagCandidates.length} \u4e2a flag \u5019\u9009\u3002`);
@@ -2643,10 +4319,10 @@ function buildQuickFindings(artifacts, flagCandidates, pipelineLog) {
     findings.push("\u68c0\u6d4b\u5230\u56fe\u50cf\u9644\u4ef6\uff0c\u5e94\u52a0\u5165 EXIF\u3001\u50cf\u7d20\u901a\u9053\u548c\u5c3e\u90e8\u9690\u85cf\u6570\u636e\u68c0\u67e5\u3002");
   }
   if (families.audio) {
-    findings.push("\u68c0\u6d4b\u5230\u97f3\u9891\u9644\u4ef6\uff0c\u5e94\u68c0\u67e5 RIFF \u5757\u3001PCM LSB\u3001strings \u548c\u6ce2\u5f62\u53ef\u89c6\u5316\u3002");
+    findings.push("\u68c0\u6d4b\u5230\u97f3\u9891\u9644\u4ef6\uff0c\u5e94\u68c0\u67e5 RIFF \u5757\u3001PCM LSB\u3001strings\u3001\u4e3b\u9891\u6bb5\u3001Morse \u5019\u9009\u548c\u9891\u8c31/\u6ce2\u5f62\u89c6\u56fe\u3002");
   }
   if (families.binary) {
-    findings.push("\u68c0\u6d4b\u5230\u4e8c\u8fdb\u5236\u9644\u4ef6\uff0c\u5e94\u5148\u62bd strings \u548c\u5bfc\u5165\u8868\u518d\u8fdb\u5165\u9006\u5411\u6216 pwn \u5206\u6790\u3002");
+    findings.push("\u68c0\u6d4b\u5230\u4e8c\u8fdb\u5236\u9644\u4ef6\uff0c\u5e94\u5148\u68c0\u67e5 ELF / PE \u5934\u3001sections\u3001imports \u6216 APK Manifest / DEX \u518d\u8fdb\u5165\u9006\u5411\u3002");
   }
   if (families.archive) {
     findings.push("\u68c0\u6d4b\u5230\u538b\u7f29\u5305\uff0c\u5efa\u8bae\u5c06\u5d4c\u5957\u5185\u5bb9\u4f5c\u4e3a\u65b0\u9898\u6e90\u7ee7\u7eed\u5206\u6790\u3002");
@@ -2736,7 +4412,7 @@ function buildGeneratedDescriptor(filePath) {
 }
 
 function createActionOutputRoot(outputRoot, filePath, actionId) {
-  return path.join(outputRoot, `${sanitizeSegment(path.parse(filePath).name)}-${shortHash(filePath)}-${actionId}`);
+  return path.join(outputRoot, `${sanitizeSegment(path.parse(filePath).name)}-${shortHash(filePath)}-${sanitizeSegment(actionId)}`);
 }
 
 function extractAppendedZip(filePath, outputRoot) {
@@ -2776,30 +4452,13 @@ function extractAppendedPayloads(filePath, outputRoot) {
   };
 }
 
-function extractArchive(filePath, outputRoot) {
-  const sample = readSample(filePath, 16).buffer;
-  if (detectMagic(sample) === "gzip" || path.extname(filePath).toLowerCase() === ".gz") {
-    const buffer = fs.readFileSync(filePath);
-    const inflated = zlib.gunzipSync(buffer, { maxOutputLength: MAX_ARCHIVE_TOTAL_BYTES });
-    const parsed = path.parse(filePath);
-    let generatedName = sanitizeSegment(parsed.name) || `${sanitizeSegment(parsed.base)}-inflated`;
-    if (!path.extname(generatedName)) {
-      generatedName = `${generatedName}.bin`;
-    }
-    const outPath = writeGeneratedFile(outputRoot, generatedName, inflated);
-    return {
-      message: "\u5df2\u89e3\u538b GZIP \u5e76\u7ee7\u7eed\u7eb3\u5165\u5206\u6790\u3002",
-      createdFiles: [outPath],
-    };
-  }
-
-  const zip = new AdmZip(filePath);
+function extractZipEntries(zip, outputRoot) {
+  ensureOutputRoot(outputRoot);
   const entries = zip.getEntries().filter((entry) => !entry.isDirectory);
   if (!entries.length) {
-    throw new Error("\u538b\u7f29\u5305\u4e2d\u6ca1\u6709\u53ef\u63d0\u53d6\u7684\u6587\u4ef6\u3002");
+    return [];
   }
 
-  ensureOutputRoot(outputRoot);
   let totalBytes = 0;
   const createdFiles = [];
 
@@ -2819,13 +4478,122 @@ function extractArchive(filePath, outputRoot) {
     createdFiles.push(finalPath);
   }
 
+  return createdFiles;
+}
+
+function extractArchive(filePath, outputRoot) {
+  const sample = readSample(filePath, 16).buffer;
+  if (detectMagic(sample) === "gzip" || path.extname(filePath).toLowerCase() === ".gz") {
+    const buffer = fs.readFileSync(filePath);
+    const inflated = zlib.gunzipSync(buffer, { maxOutputLength: MAX_ARCHIVE_TOTAL_BYTES });
+    const parsed = path.parse(filePath);
+    let generatedName = sanitizeSegment(parsed.name) || `${sanitizeSegment(parsed.base)}-inflated`;
+    if (!path.extname(generatedName)) {
+      generatedName = `${generatedName}.bin`;
+    }
+    const outPath = writeGeneratedFile(outputRoot, generatedName, inflated);
+    return {
+      message: "\u5df2\u89e3\u538b GZIP \u5e76\u7ee7\u7eed\u7eb3\u5165\u5206\u6790\u3002",
+      createdFiles: [outPath],
+    };
+  }
+
+  const zip = new AdmZip(filePath);
+  const createdFiles = extractZipEntries(zip, outputRoot);
   if (!createdFiles.length) {
-    throw new Error("\u538b\u7f29\u5305\u89e3\u5305\u7ed3\u679c\u4e3a\u7a7a\u6216\u88ab\u9650\u5236\u89c4\u5219\u8fc7\u6ee4\u3002");
+    throw new Error("\u538b\u7f29\u5305\u4e2d\u6ca1\u6709\u53ef\u63d0\u53d6\u7684\u6587\u4ef6\u3002");
   }
 
   return {
     message: "\u5df2\u89e3\u5305 ZIP \u5e76\u5c06\u5185\u5bb9\u7eb3\u5165\u7ee7\u7eed\u5206\u6790\u3002",
     createdFiles,
+  };
+}
+
+function extractBinaryClues(filePath, outputRoot) {
+  const buffer = fs.readFileSync(filePath);
+  const baseName = sanitizeSegment(path.parse(filePath).name);
+  const createdFiles = [];
+
+  const elfReport = parseElfBinary(buffer);
+  if (elfReport) {
+    createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-elf-summary.txt`, buildElfSummaryText(path.basename(filePath), elfReport)));
+    if (elfReport.neededLibraries.length) {
+      createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-elf-needed.txt`, `${elfReport.neededLibraries.join("\n")}\n`));
+    }
+    if (elfReport.commentPreview.length) {
+      createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-elf-comment.txt`, `${elfReport.commentPreview.join("\n")}\n`));
+    }
+    if (elfReport.symbolTables.length) {
+      const symbolLines = [];
+      elfReport.symbolTables.forEach((table) => {
+        symbolLines.push(`# ${table.name} (${table.count})`);
+        dedupeStrings([...table.functions, ...table.globals, ...table.objects]).forEach((item) => symbolLines.push(item));
+        symbolLines.push("");
+      });
+      createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-elf-symbols.txt`, `${symbolLines.join("\n")}\n`));
+    }
+    if (elfReport.relocations.length) {
+      const relocationLines = [];
+      elfReport.relocations.forEach((entry) => {
+        relocationLines.push(`# ${entry.name} -> ${entry.target || "?"} (${entry.count})`);
+        entry.symbols.forEach((item) => relocationLines.push(item));
+        relocationLines.push("");
+      });
+      createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-elf-relocations.txt`, `${relocationLines.join("\n")}\n`));
+    }
+    return {
+      message: "\u5df2\u63d0\u53d6 ELF \u5934\u3001section\u3001\u52a8\u6001\u4f9d\u8d56\u3001\u7b26\u53f7\u4e0e\u91cd\u5b9a\u4f4d\u7ebf\u7d22\u3002",
+      createdFiles: dedupeStrings(createdFiles),
+    };
+  }
+
+  const peReport = parsePeBinary(buffer);
+  if (peReport) {
+    createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-pe-summary.txt`, buildPeSummaryText(path.basename(filePath), peReport)));
+    if (peReport.importedFunctions.length) {
+      createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-pe-imports.txt`, `${peReport.importedFunctions.join("\n")}\n`));
+    }
+    if (peReport.exportedFunctions.length) {
+      createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-pe-exports.txt`, `${peReport.exportedFunctions.join("\n")}\n`));
+    }
+    return {
+      message: "\u5df2\u63d0\u53d6 PE \u53ef\u9009\u5934\u3001section\u3001imports\u3001exports \u548c\u5b50\u7cfb\u7edf\u7ebf\u7d22\u3002",
+      createdFiles: dedupeStrings(createdFiles),
+    };
+  }
+
+  throw new Error("\u76ee\u524d\u53ea\u652f\u6301 ELF / PE \u7ed3\u6784\u5316\u7ebf\u7d22\u63d0\u53d6\u3002");
+}
+
+function extractApkPackage(filePath, outputRoot) {
+  const report = parseApkPackage(filePath);
+  if (!report) {
+    throw new Error("\u6ca1\u6709\u89e3\u6790\u5230\u53ef\u7528\u7684 APK \u5185\u5bb9\u3002");
+  }
+
+  ensureOutputRoot(outputRoot);
+  const baseName = sanitizeSegment(path.parse(filePath).name);
+  const zip = new AdmZip(filePath);
+  const createdFiles = [];
+  createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-apk-summary.txt`, buildApkSummaryText(path.basename(filePath), report)));
+  if (report.manifestStrings.length) {
+    createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-manifest-strings.txt`, `${report.manifestStrings.join("\n")}\n`));
+  }
+  if (report.dexStrings.length) {
+    createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-dex-strings.txt`, `${report.dexStrings.join("\n")}\n`));
+  }
+  if (report.dexMethods.length) {
+    createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-dex-methods.txt`, `${report.dexMethods.join("\n")}\n`));
+  }
+  if (report.resourceStrings.length) {
+    createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-resources-strings.txt`, `${report.resourceStrings.join("\n")}\n`));
+  }
+  extractZipEntries(zip, outputRoot).forEach((item) => createdFiles.push(item));
+
+  return {
+    message: "\u5df2\u62c6\u89e3 APK\uff0c\u5bfc\u51fa Manifest / resources / DEX \u7ebf\u7d22\u5e76\u7ee7\u7eed\u9012\u5f52\u5206\u6790\u3002",
+    createdFiles: dedupeStrings(createdFiles),
   };
 }
 
@@ -3025,7 +4793,7 @@ function extractImageViews(filePath, outputRoot) {
   };
 }
 
-function buildAudioSummaryText(fileName, wavInfo, lsbCandidates) {
+function buildAudioSummaryText(fileName, wavInfo, lsbCandidates, audioSignal, strings) {
   const lines = [`# AUDIO SUMMARY`, `file: ${fileName}`, ""];
   if (wavInfo) {
     lines.push(`format: ${wavInfo.audioFormat}`);
@@ -3046,6 +4814,45 @@ function buildAudioSummaryText(fileName, wavInfo, lsbCandidates) {
       lines.push("");
     }
   }
+  if (audioSignal) {
+    if (audioSignal.dominantFrequencies.length) {
+      lines.push("# DOMINANT FREQUENCIES");
+      audioSignal.dominantFrequencies.forEach((item) => {
+        lines.push(`${Math.round(item.frequencyHz)} Hz (${item.durationSeconds.toFixed(2)}s active)`);
+      });
+      lines.push("");
+    }
+    if (audioSignal.activeSegments.length) {
+      lines.push("# ACTIVITY SEGMENTS");
+      audioSignal.activeSegments.slice(0, 32).forEach((segment, index) => {
+        const frequency = segment.frequencyHz ? ` @ ${Math.round(segment.frequencyHz)} Hz` : "";
+        lines.push(
+          `${index + 1}. ${segment.startSeconds.toFixed(2)}s -> ${segment.endSeconds.toFixed(2)}s (${segment.durationSeconds.toFixed(2)}s)${frequency}`,
+        );
+      });
+      if (audioSignal.activeSegments.length > 32) {
+        lines.push(`... ${audioSignal.activeSegments.length - 32} more segments`);
+      }
+      lines.push("");
+    }
+    if (audioSignal.morseCandidates.length) {
+      lines.push("# MORSE CANDIDATES");
+      audioSignal.morseCandidates.forEach((candidate, index) => {
+        lines.push(`${index + 1}. ${candidate.text}`);
+        lines.push(`pattern: ${candidate.pattern}`);
+        lines.push(`unit: ${candidate.unitMilliseconds} ms`);
+        lines.push("");
+      });
+    }
+  }
+  if (strings.length) {
+    lines.push("# STRINGS PREVIEW");
+    strings.slice(0, 24).forEach((entry) => lines.push(entry));
+    if (strings.length > 24) {
+      lines.push(`... ${strings.length - 24} more strings`);
+    }
+    lines.push("");
+  }
   if (lsbCandidates.length) {
     lines.push("# LSB");
     lsbCandidates.forEach((item) => {
@@ -3062,16 +4869,20 @@ function extractAudioClues(filePath, outputRoot) {
   const buffer = fs.readFileSync(filePath);
   const wavInfo = parseWavBuffer(buffer);
   const lsbCandidates = wavInfo ? collectAudioLSBCandidates(buffer, wavInfo) : [];
+  const audioSignal = wavInfo ? analyzeWavSignal(buffer, wavInfo, { maxSamples: MAX_AUDIO_ANALYSIS_SAMPLES }) : null;
   const strings = dedupeStrings(extractAsciiStrings(buffer, 6, 1200).concat(extractUnicodeStrings(buffer, 6, 400)));
 
-  if (!wavInfo && !lsbCandidates.length && !strings.length) {
+  const hasSignal = audioSignal && (audioSignal.activeSegments.length || audioSignal.morseCandidates.length || audioSignal.dominantFrequencies.length);
+  if (!wavInfo && !lsbCandidates.length && !strings.length && !hasSignal) {
     throw new Error("\u6ca1\u6709\u4ece\u97f3\u9891\u9644\u4ef6\u4e2d\u63d0\u53d6\u5230\u9ad8\u4fe1\u53f7\u7ebf\u7d22\u3002");
   }
 
   ensureOutputRoot(outputRoot);
   const createdFiles = [];
   const baseName = sanitizeSegment(path.parse(filePath).name);
-  createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-audio-summary.txt`, buildAudioSummaryText(path.basename(filePath), wavInfo, lsbCandidates)));
+  createdFiles.push(
+    writeGeneratedFile(outputRoot, `${baseName}-audio-summary.txt`, buildAudioSummaryText(path.basename(filePath), wavInfo, lsbCandidates, audioSignal, strings)),
+  );
   if (lsbCandidates.length) {
     const sections = lsbCandidates.flatMap((item) => {
       const lines = [`# ${item.channel}`];
@@ -3085,9 +4896,40 @@ function extractAudioClues(filePath, outputRoot) {
   if (strings.length) {
     createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-audio-strings.txt`, `${strings.join("\n")}\n`));
   }
+  if (hasSignal) {
+    const toneLines = [`# AUDIO TONES`, `file: ${path.basename(filePath)}`, ""];
+    if (audioSignal.dominantFrequencies.length) {
+      toneLines.push("# DOMINANT");
+      audioSignal.dominantFrequencies.forEach((item) => {
+        toneLines.push(`${Math.round(item.frequencyHz)} Hz (${item.durationSeconds.toFixed(2)}s active)`);
+      });
+      toneLines.push("");
+    }
+    if (audioSignal.activeSegments.length) {
+      toneLines.push("# SEGMENTS");
+      audioSignal.activeSegments.forEach((segment, index) => {
+        const frequency = segment.frequencyHz ? `${Math.round(segment.frequencyHz)} Hz` : "unknown";
+        toneLines.push(
+          `${index + 1}. ${segment.startSeconds.toFixed(3)}s -> ${segment.endSeconds.toFixed(3)}s (${segment.durationSeconds.toFixed(3)}s) ${frequency}`,
+        );
+      });
+      toneLines.push("");
+    }
+    createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-audio-tones.txt`, `${toneLines.join("\n")}\n`));
+  }
+  if (audioSignal && audioSignal.morseCandidates.length) {
+    const morseLines = [`# AUDIO MORSE`, `file: ${path.basename(filePath)}`, ""];
+    audioSignal.morseCandidates.forEach((candidate, index) => {
+      morseLines.push(`${index + 1}. ${candidate.text}`);
+      morseLines.push(`pattern: ${candidate.pattern}`);
+      morseLines.push(`unit: ${candidate.unitMilliseconds} ms`);
+      morseLines.push("");
+    });
+    createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-audio-morse.txt`, `${morseLines.join("\n")}\n`));
+  }
 
   return {
-    message: "\u5df2\u63d0\u53d6 WAV \u5757\u4fe1\u606f\u3001strings \u548c PCM LSB \u5019\u9009\u3002",
+    message: "\u5df2\u63d0\u53d6 WAV \u5757\u4fe1\u606f\u3001strings\u3001PCM LSB\u3001\u97f3\u8c03\u5206\u6bb5\u548c Morse \u5019\u9009\u3002",
     createdFiles: dedupeStrings(createdFiles),
   };
 }
@@ -3098,15 +4940,22 @@ function extractAudioViews(filePath, outputRoot) {
   if (!wavInfo) {
     throw new Error("\u76ee\u524d\u53ea\u652f\u6301 WAV \u97f3\u9891\u7684\u6ce2\u5f62\u89c6\u56fe\u5bfc\u51fa\u3002");
   }
+  const createdFiles = [];
+  const baseName = sanitizeSegment(path.parse(filePath).name);
   const waveform = renderWavWaveform(buffer, wavInfo);
-  if (!waveform) {
-    throw new Error("\u6ca1\u6709\u751f\u6210 WAV \u6ce2\u5f62\u56fe\u3002");
+  const spectrogram = renderWavSpectrogram(buffer, wavInfo);
+  if (waveform) {
+    createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-waveform.png`, waveform));
   }
-
-  const outPath = writeGeneratedFile(outputRoot, `${sanitizeSegment(path.parse(filePath).name)}-waveform.png`, waveform);
+  if (spectrogram) {
+    createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-spectrogram.png`, spectrogram));
+  }
+  if (!createdFiles.length) {
+    throw new Error("\u6ca1\u6709\u751f\u6210 WAV \u6ce2\u5f62\u56fe\u6216\u9891\u8c31\u56fe\u3002");
+  }
   return {
-    message: "\u5df2\u5bfc\u51fa WAV \u6ce2\u5f62\u56fe\u3002",
-    createdFiles: [outPath],
+    message: "\u5df2\u5bfc\u51fa WAV \u6ce2\u5f62\u56fe\u548c\u9891\u8c31\u56fe\u3002",
+    createdFiles,
   };
 }
 
@@ -3455,6 +5304,10 @@ async function runArtifactActionInternal(actionId, filePath, outputRoot) {
 
   const baseDir = createActionOutputRoot(outputRoot, filePath, actionId);
 
+  if (String(actionId || "").startsWith("tool:")) {
+    return runToolAction(actionId, filePath, baseDir);
+  }
+
   if (actionId === "extract-appended-zip" || actionId === "extract-appended-payloads") {
     return actionId === "extract-appended-zip" ? extractAppendedZip(filePath, baseDir) : extractAppendedPayloads(filePath, baseDir);
   }
@@ -3481,6 +5334,12 @@ async function runArtifactActionInternal(actionId, filePath, outputRoot) {
   }
   if (actionId === "extract-audio-views") {
     return extractAudioViews(filePath, baseDir);
+  }
+  if (actionId === "extract-binary-clues") {
+    return extractBinaryClues(filePath, baseDir);
+  }
+  if (actionId === "extract-apk-package") {
+    return extractApkPackage(filePath, baseDir);
   }
   if (actionId === "extract-pdf-content") {
     return extractPdfContent(filePath, baseDir);
@@ -3534,6 +5393,12 @@ function shouldAutoRun(actionId, artifact) {
   }
   if (actionId === "extract-audio-views") {
     return false;
+  }
+  if (actionId === "extract-binary-clues") {
+    return artifact.family === "binary" && artifact.badge !== "APK" && artifact.depth === 0;
+  }
+  if (actionId === "extract-apk-package") {
+    return artifact.badge === "APK" && artifact.depth < MAX_PIPELINE_DEPTH;
   }
   if (actionId === "extract-pdf-content") {
     return artifact.badge === "PDF" && artifact.depth === 0;
@@ -3657,6 +5522,7 @@ async function analyzeChallenge(payload, outputRoot) {
 
   const classification = classifyChallenge({ title, description, notes, tags }, pipeline.artifacts);
   const quickFindings = buildQuickFindings(pipeline.artifacts, allFlagCandidates, pipeline.pipelineLog);
+  const toolStatus = getToolStatusSummary();
   const warnings = [];
 
   if (collection.truncated) {
@@ -3677,6 +5543,7 @@ async function analyzeChallenge(payload, outputRoot) {
     quickFindings,
     flagCandidates: allFlagCandidates,
     warnings,
+    toolStatus,
     inferredNeeds: COPY.needs,
     emptyFlagMessage: COPY.app.noFlags,
   };
