@@ -4,6 +4,7 @@ const path = require("path");
 const { analyzeChallenge, prepareArtifactsFromEntries, runArtifactAction } = require("./analyzer");
 
 const isDev = !app.isPackaged;
+const SANDBOX_DIR_NAME = "sandbox";
 
 function createWindow() {
   const mainWindow = new BrowserWindow({
@@ -30,15 +31,104 @@ function createWindow() {
 }
 
 function buildRunOutputRoot() {
-  return path.join(app.getPath("userData"), "generated", `analysis-${Date.now()}`);
+  return path.join(sandboxRootPath(), "generated", `analysis-${Date.now()}`);
+}
+
+function sandboxRootPath() {
+  return path.join(app.getPath("userData"), SANDBOX_DIR_NAME);
+}
+
+function sandboxSubPath(name) {
+  return path.join(sandboxRootPath(), name);
 }
 
 function workspaceFilePath() {
-  return path.join(app.getPath("userData"), "workspace", "current-session.json");
+  return path.join(sandboxRootPath(), "session", "current-session.json");
 }
 
 function ensureParentDir(targetPath) {
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+}
+
+function ensureSandboxLayout() {
+  ["generated", "downloads", "tools", "session"].forEach((name) => {
+    fs.mkdirSync(sandboxSubPath(name), { recursive: true });
+  });
+}
+
+function formatBytes(size) {
+  if (size < 1024) {
+    return `${size} B`;
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+  if (size < 1024 * 1024 * 1024) {
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function measureDirectory(rootPath) {
+  if (!fs.existsSync(rootPath)) {
+    return { bytes: 0, files: 0 };
+  }
+
+  const stack = [rootPath];
+  let bytes = 0;
+  let files = 0;
+  while (stack.length) {
+    const current = stack.pop();
+    let stat;
+    try {
+      stat = fs.statSync(current);
+    } catch (_error) {
+      continue;
+    }
+
+    if (stat.isDirectory()) {
+      fs.readdirSync(current).forEach((name) => stack.push(path.join(current, name)));
+      continue;
+    }
+
+    if (stat.isFile()) {
+      bytes += stat.size;
+      files += 1;
+    }
+  }
+
+  return { bytes, files };
+}
+
+function clearSessionWorkspace() {
+  const targetPath = workspaceFilePath();
+  if (fs.existsSync(targetPath)) {
+    fs.unlinkSync(targetPath);
+  }
+}
+
+function cleanupLegacyRuntimeData() {
+  ["generated", "workspace"].forEach((name) => {
+    const legacyPath = path.join(app.getPath("userData"), name);
+    if (fs.existsSync(legacyPath)) {
+      fs.rmSync(legacyPath, { recursive: true, force: true });
+    }
+  });
+}
+
+function getSandboxInfo() {
+  ensureSandboxLayout();
+  const size = measureDirectory(sandboxRootPath());
+  return {
+    root: sandboxRootPath(),
+    generated: sandboxSubPath("generated"),
+    downloads: sandboxSubPath("downloads"),
+    tools: sandboxSubPath("tools"),
+    session: sandboxSubPath("session"),
+    bytes: size.bytes,
+    sizeLabel: formatBytes(size.bytes),
+    fileCount: size.files,
+  };
 }
 
 async function selectFiles() {
@@ -80,6 +170,12 @@ ipcMain.handle("reveal-artifact", async (_event, targetPath) => {
   }
 });
 ipcMain.handle("load-workspace", async () => {
+  ensureSandboxLayout();
+  cleanupLegacyRuntimeData();
+  clearSessionWorkspace();
+  return null;
+});
+ipcMain.handle("load-previous-workspace", async () => {
   const targetPath = workspaceFilePath();
   if (!fs.existsSync(targetPath)) {
     return null;
@@ -99,6 +195,20 @@ ipcMain.handle("clear-workspace", async () => {
     fs.unlinkSync(targetPath);
   }
   return { cleared: true };
+});
+ipcMain.handle("sandbox-info", async () => getSandboxInfo());
+ipcMain.handle("reveal-sandbox", async () => {
+  const info = getSandboxInfo();
+  await shell.openPath(info.root);
+  return info;
+});
+ipcMain.handle("clear-sandbox", async () => {
+  const root = sandboxRootPath();
+  if (fs.existsSync(root)) {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+  ensureSandboxLayout();
+  return getSandboxInfo();
 });
 ipcMain.handle("export-report", async (_event, payload) => {
   const suggestedName = String(payload?.suggestedName || "ctf-compass-report.md");
@@ -124,9 +234,13 @@ ipcMain.handle("app-meta", async () => ({
   version: app.getVersion(),
   packaged: app.isPackaged,
   mode: isDev ? "development" : "production",
+  sandboxRoot: sandboxRootPath(),
 }));
 
 app.whenReady().then(() => {
+  ensureSandboxLayout();
+  cleanupLegacyRuntimeData();
+  clearSessionWorkspace();
   createWindow();
 
   app.on("activate", () => {

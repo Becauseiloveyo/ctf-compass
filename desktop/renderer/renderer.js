@@ -80,8 +80,14 @@ const STRINGS = {
   settingsOfflineNote: "\u65b0\u7248\u903b\u8f91\u4e0d\u518d\u4f9d\u8d56\u5916\u90e8 Python\uff0c\u6253\u5305\u540e\u53ef\u76f4\u63a5\u8fd0\u884c",
   settingsCaseSummaryTitle: "\u7ed3\u6848\u5907\u6ce8",
   settingsCaseSummaryNote: "\u8bb0\u4e0b\u4f60\u5df2\u786e\u8ba4\u7684 flag\uff0c\u89e3\u9898\u8def\u5f84\u548c\u63d0\u4ea4\u65f6\u9700\u8981\u7684\u8bf4\u660e\u3002",
-  settingsAutoSaveTitle: "\u5de5\u4f5c\u533a\u81ea\u52a8\u4fdd\u5b58",
-  settingsAutoSaveNote: "\u9898\u9762\u3001\u9644\u4ef6\u8def\u5f84\u3001\u7ec8\u5c40 flag \u548c\u8bc1\u636e\u7b14\u8bb0\u4f1a\u5728\u672c\u5730\u81ea\u52a8\u4fdd\u5b58\uff0c\u4e0b\u6b21\u6253\u5f00\u81ea\u52a8\u6062\u590d\u3002",
+  settingsAutoSaveTitle: "\u65b0\u4f1a\u8bdd\u542f\u52a8",
+  settingsAutoSaveNote: "\u6bcf\u6b21\u6253\u5f00\u90fd\u4ece\u7a7a\u767d\u5de5\u4f5c\u53f0\u5f00\u59cb\uff1b\u4e0a\u4e00\u8f6e\u9644\u4ef6\u3001\u9898\u9762\u548c\u751f\u6210\u7269\u4e0d\u4f1a\u81ea\u52a8\u6062\u590d\u3002",
+  settingsSandboxTitle: "\u6c99\u76d2\u7a7a\u95f4",
+  settingsSandboxNote: "\u81ea\u52a8\u751f\u6210\u6587\u4ef6\u3001\u4e34\u65f6\u4f1a\u8bdd\u548c\u672a\u6765\u7684\u4fbf\u643a\u5de5\u5177\u4e0b\u8f7d\u90fd\u6536\u5728\u8fd9\u4e2a\u76ee\u5f55\uff0c\u5220\u6389\u5b83\u5c31\u80fd\u4e00\u8d77\u6e05\u7a7a\u3002",
+  settingsSandboxPath: "\u8def\u5f84",
+  settingsSandboxSize: "\u5f53\u524d\u5360\u7528",
+  openSandboxButton: "\u6253\u5f00\u6c99\u76d2\u76ee\u5f55",
+  clearSandboxButton: "\u6e05\u7406\u6c99\u76d2",
   settingsWorkspaceTitle: "\u5de5\u4f5c\u533a\u7ba1\u7406",
   settingsWorkspaceNote: "\u53ef\u4ee5\u5bfc\u51fa Markdown \u62a5\u544a\uff0c\u6216\u76f4\u63a5\u6e05\u7a7a\u5f53\u524d\u8c03\u67e5\u7ebf\u7d22\u3002",
   clearWorkspaceButton: "\u6e05\u7a7a\u5de5\u4f5c\u533a",
@@ -100,8 +106,9 @@ const STRINGS = {
   statusFocusDescription: "\u8bf7\u76f4\u63a5\u7c98\u8d34\u9898\u9762\u3001hint \u6216\u5f53\u524d\u89c2\u5bdf\u5230\u7684\u53ef\u7591\u70b9\u3002",
   statusActionRunning: "\u6b63\u5728\u5904\u7406\u53ef\u81ea\u52a8\u6267\u884c\u7684\u7ebf\u7d22...",
   statusActionDone: "\u5df2\u751f\u6210\u65b0\u7684\u884d\u751f\u6587\u4ef6\uff0c\u5e76\u5df2\u91cd\u65b0\u5206\u6790\u3002",
-  statusWorkspaceRestored: "\u5df2\u6062\u590d\u4e0a\u6b21\u5de5\u4f5c\u533a\uff0c\u5f53\u524d\u7ebf\u7d22\u5df2\u56de\u586b\u3002",
+  statusWorkspaceRestored: "\u5df2\u542f\u52a8\u65b0\u4f1a\u8bdd\uff0c\u4e0a\u6b21\u9644\u4ef6\u4e0d\u4f1a\u81ea\u52a8\u6062\u590d\u3002",
   statusWorkspaceCleared: "\u5f53\u524d\u5de5\u4f5c\u533a\u5df2\u6e05\u7a7a\u3002",
+  statusSandboxCleared: "\u6c99\u76d2\u5df2\u6e05\u7406\uff0c\u81ea\u52a8\u751f\u6210\u7684\u9644\u4ef6\u548c\u4e34\u65f6\u5185\u5bb9\u5df2\u79fb\u9664\u3002",
   statusReportExported: "\u5df2\u5bfc\u51fa Markdown \u62a5\u544a\uff1a",
   statusErrorPrefix: "\u5206\u6790\u5931\u8d25\uff1a",
   artifactOpen: "\u6253\u5f00\u4f4d\u7f6e",
@@ -184,6 +191,8 @@ const elements = {
   exportReportButton: document.getElementById("export-report-button"),
   settingsExportReportButton: document.getElementById("settings-export-report-button"),
   clearWorkspaceButton: document.getElementById("clear-workspace-button"),
+  openSandboxButton: document.getElementById("open-sandbox-button"),
+  clearSandboxButton: document.getElementById("clear-sandbox-button"),
   statusBanner: document.getElementById("status-banner"),
   titleInput: document.getElementById("title-input"),
   tagsInput: document.getElementById("tags-input"),
@@ -214,6 +223,8 @@ const elements = {
   nextList: document.getElementById("next-list"),
   findingList: document.getElementById("finding-list"),
   toolList: document.getElementById("tool-list"),
+  sandboxPath: document.getElementById("sandbox-path"),
+  sandboxSize: document.getElementById("sandbox-size"),
   roadmapList: document.getElementById("roadmap-list"),
 };
 
@@ -388,7 +399,14 @@ function updateActionAvailability() {
   setButtonDisabled(elements.exportReportButton, !canExport, canExport ? "" : "\u5148\u8fd0\u884c\u4e00\u6b21\u5206\u6790\u3002");
   setButtonDisabled(elements.settingsExportReportButton, !canExport, canExport ? "" : "\u5148\u8fd0\u884c\u4e00\u6b21\u5206\u6790\u3002");
 
-  [elements.pickFilesButton, elements.pickFolderButton, elements.quickFilesButton, elements.quickFolderButton, elements.artifactDropzone].forEach((button) => {
+  [
+    elements.pickFilesButton,
+    elements.pickFolderButton,
+    elements.quickFilesButton,
+    elements.quickFolderButton,
+    elements.artifactDropzone,
+    elements.clearSandboxButton,
+  ].forEach((button) => {
     setButtonDisabled(button, state.isBusy);
   });
   elements.body.classList.toggle("is-busy", state.isBusy);
@@ -1290,6 +1308,7 @@ async function runAnalysis(options = {}) {
       renderViewHeader();
     }
     scheduleWorkspaceSave();
+    await refreshSandboxInfo();
     setStatus(doneMessage);
   } catch (error) {
     setStatus(`${STRINGS.statusErrorPrefix} ${error.message}`, "error");
@@ -1447,6 +1466,7 @@ async function clearWorkspace() {
     await window.ctfCompass.clearWorkspace();
     renderAll();
     switchView("workspace");
+    await refreshSandboxInfo();
     persistenceReady = true;
     setStatus(STRINGS.statusWorkspaceCleared);
   } catch (error) {
@@ -1457,44 +1477,69 @@ async function clearWorkspace() {
 
 async function hydrateWorkspace() {
   try {
-    const snapshot = await window.ctfCompass.loadWorkspace();
-    if (!snapshot) {
-      persistenceReady = true;
-      return;
-    }
-
+    await window.ctfCompass.loadWorkspace();
     persistenceReady = false;
-    state.casebook = normalizeCasebook(snapshot.casebook);
-    state.activeView = VIEW_COPY[snapshot.activeView] ? snapshot.activeView : "workspace";
-    state.workbenchFamily = ["binary", "network", "image", "audio"].includes(snapshot.workbenchFamily) ? snapshot.workbenchFamily : "binary";
-
-    if (snapshot.theme) {
-      setTheme(snapshot.theme);
-    }
-
-    elements.titleInput.value = String(snapshot.challenge?.title || "");
-    elements.tagsInput.value = Array.isArray(snapshot.challenge?.tags) ? snapshot.challenge.tags.join(" ") : "";
-    elements.descriptionInput.value = String(snapshot.challenge?.description || "");
-    elements.notesInput.value = String(snapshot.challenge?.notes || "");
-    elements.caseSummaryInput.value = state.casebook.summary;
-
-    if (Array.isArray(snapshot.artifacts) && snapshot.artifacts.length) {
-      state.artifacts = uniqArtifacts(await window.ctfCompass.prepareArtifacts(snapshot.artifacts));
-    }
-
+    state.artifacts = [];
+    state.analysis = null;
+    state.casebook = createEmptyCasebook();
+    state.activeView = "workspace";
+    state.workbenchFamily = "binary";
+    elements.titleInput.value = "";
+    elements.tagsInput.value = "";
+    elements.descriptionInput.value = "";
+    elements.notesInput.value = "";
+    elements.caseSummaryInput.value = "";
     renderAll();
-    switchView(state.activeView);
+    switchView("workspace");
     persistenceReady = true;
-
-    if (workspaceHasAnalyzableInput()) {
-      await runAnalysis({ focusResults: false, doneMessage: STRINGS.statusWorkspaceRestored });
-      switchView(state.activeView);
-    } else if (workspaceHasContent()) {
-      setStatus(STRINGS.statusWorkspaceRestored);
-    }
+    setStatus(STRINGS.statusWorkspaceRestored);
   } catch (error) {
     persistenceReady = true;
     setStatus(`${STRINGS.statusErrorPrefix} ${error.message}`, "error");
+  }
+}
+
+function updateSandboxInfo(info) {
+  if (!info) {
+    return;
+  }
+  elements.sandboxPath.textContent = info.root || "...";
+  elements.sandboxPath.title = info.root || "";
+  elements.sandboxSize.textContent = `${info.sizeLabel || "0 B"} / ${info.fileCount || 0} \u4e2a\u6587\u4ef6`;
+}
+
+async function refreshSandboxInfo() {
+  try {
+    updateSandboxInfo(await window.ctfCompass.getSandboxInfo());
+  } catch (error) {
+    elements.sandboxSize.textContent = error.message;
+  }
+}
+
+async function openSandboxFolder() {
+  try {
+    updateSandboxInfo(await window.ctfCompass.revealSandbox());
+  } catch (error) {
+    setStatus(`${STRINGS.statusErrorPrefix} ${error.message}`, "error");
+  }
+}
+
+async function clearSandboxData() {
+  if (state.isBusy) {
+    return;
+  }
+  setBusy(true);
+  try {
+    const info = await window.ctfCompass.clearSandbox();
+    state.artifacts = state.artifacts.filter((artifact) => artifact.sourceKind !== "generated");
+    state.analysis = null;
+    updateSandboxInfo(info);
+    renderAll();
+    setStatus(STRINGS.statusSandboxCleared);
+  } catch (error) {
+    setStatus(`${STRINGS.statusErrorPrefix} ${error.message}`, "error");
+  } finally {
+    setBusy(false);
   }
 }
 
@@ -1502,7 +1547,10 @@ async function hydrateMeta() {
   const meta = await window.ctfCompass.getMeta();
   const text = `${meta.mode}  |  v${meta.version}`;
   elements.appMeta.textContent = text;
-  elements.settingsRuntime.textContent = text;
+  elements.settingsRuntime.textContent = `${text}  |  sandbox: ${meta.sandboxRoot}`;
+  elements.sandboxPath.textContent = meta.sandboxRoot || "...";
+  elements.sandboxPath.title = meta.sandboxRoot || "";
+  await refreshSandboxInfo();
 }
 
 elements.navItems.forEach((button) => {
@@ -1516,6 +1564,8 @@ elements.settingsThemeToggle.addEventListener("click", toggleTheme);
 elements.exportReportButton.addEventListener("click", exportReport);
 elements.settingsExportReportButton.addEventListener("click", exportReport);
 elements.clearWorkspaceButton.addEventListener("click", clearWorkspace);
+elements.openSandboxButton.addEventListener("click", openSandboxFolder);
+elements.clearSandboxButton.addEventListener("click", clearSandboxData);
 elements.pickFilesButton.addEventListener("click", () => appendPreparedArtifacts(window.ctfCompass.pickFiles()));
 elements.pickFolderButton.addEventListener("click", () => appendPreparedArtifacts(window.ctfCompass.pickFolder()));
 elements.quickFilesButton.addEventListener("click", () => appendPreparedArtifacts(window.ctfCompass.pickFiles()));

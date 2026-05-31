@@ -1,6 +1,6 @@
 # CTF Compass
 
-CTF Compass is a safe, extensible desktop app for lawful CTF practice. It is now designed around a file-first workflow: challenge statements, images, text files, archives, binaries, and traffic captures are treated as first-class inputs instead of optional notes.
+CTF Compass is a safe, extensible desktop app for lawful CTF practice. It is designed around a file-first workflow: challenge statements, images, text files, archives, binaries, and traffic captures are treated as first-class inputs instead of optional notes.
 
 ## Scope
 
@@ -19,7 +19,8 @@ This project is intentionally limited to legitimate CTF training workflows:
 - detect local professional CTF tools on PATH and expose real executable actions instead of placeholder guidance
 - run installed tool adapters for ExifTool, binwalk, zsteg, TShark, Ciphey, rabin2, jadx, and apktool, then import generated output back into the workspace
 - show missing tool status and installation hints per artifact so the user knows exactly why a deeper action is unavailable
-- automatically persist the current workspace locally, restoring challenge fields, artifact paths, final flag selection, and evidence notes on the next launch
+- start each launch with a fresh empty workspace so previous attachments and challenge text are not restored automatically
+- isolate generated files, temporary sessions, future portable tool downloads, and local helper assets under one sandbox directory that can be opened or cleared from Settings
 - export Markdown investigation reports that include classification, pipeline output, final flag, and artifact-level notebook entries
 - provide dedicated desktop workbench panes for binary / traffic / image / audio families instead of showing everything in one generic result list
 - surface solving checklists and methodology guides
@@ -38,7 +39,7 @@ This project does **not** target real-world systems and should not be used for u
 
 ## Tool-Backed Workflow
 
-CTF Compass now uses a two-layer workflow:
+CTF Compass uses a two-layer workflow:
 
 - Built-in analyzers handle deterministic local tasks such as recursive ZIP/GZIP extraction, strings, encoded text layers, PNG text chunks, PNG LSB candidates, QR/barcode detection, basic pcap triage, PDF/Office unpacking, WAV clues, and ELF/PE/APK structure summaries.
 - External tool adapters run mature local tools when they are installed. The app detects each command on PATH and only shows executable buttons for tools that can actually run.
@@ -55,6 +56,17 @@ Supported adapters:
 - `apktool`: APK resource and smali unpacking
 
 If a tool is missing, the artifact card shows it as `未安装` with the install direction. After installing and reopening/rerunning analysis, the matching action button becomes available.
+
+## Sandbox Mode
+
+Runtime output is intentionally grouped under Electron `userData/sandbox/`:
+
+- `generated/`: recursive analysis output, extracted files, tool reports, and derived artifacts
+- `downloads/`: reserved for future portable tool downloads
+- `tools/`: reserved for future portable helper binaries
+- `session/`: temporary session state, cleared on app launch
+
+Deleting the sandbox folder removes generated analysis data and future bundled helper tools together. The app also exposes `打开沙盒目录` and `清理沙盒` in Settings. Original challenge files selected from disk are never copied or deleted by sandbox cleanup.
 
 ## Repository Layout
 
@@ -78,7 +90,7 @@ npm run dist:dir
 
 The unpacked Windows app will be written to `release/win-unpacked/`.
 
-A downloadable zip can be created from the unpacked build. The current local package name is `release/CTF-Compass-0.4.1-win-x64.zip`.
+A downloadable zip can be created from the unpacked build. The current local package name is `release/CTF-Compass-0.4.2-win-x64.zip`.
 
 ## Next Steps
 
