@@ -11,6 +11,7 @@ const STRINGS = {
   addFilesButton: "\u6dfb\u52a0\u6587\u4ef6",
   addFolderButton: "\u6dfb\u52a0\u6587\u4ef6\u5939",
   runAnalysisButton: "\u7acb\u5373\u5206\u6790",
+  runDisabledHint: "\u5148\u6dfb\u52a0\u9644\u4ef6\u6216\u586b\u5199\u9898\u9762\uff0c\u518d\u5f00\u59cb\u5206\u6790\u3002",
   quickFilesTitle: "\u6dfb\u52a0\u6587\u4ef6",
   quickFilesNote: "\u56fe\u50cf\u3001txt\u3001zip\u3001ELF\u3001pcap \u90fd\u53ef\u4ee5\u76f4\u63a5\u62d6\u8fdb\u6765",
   quickFolderTitle: "\u626b\u63cf\u76ee\u5f55",
@@ -45,6 +46,7 @@ const STRINGS = {
   workbenchDerivedTitle: "\u81ea\u52a8\u751f\u6210",
   workbenchNoArtifacts: "\u8fd9\u4e00\u7c7b\u76ee\u524d\u6ca1\u6709\u53ef\u7528\u9644\u4ef6\u3002",
   workbenchNoPipeline: "\u8fd8\u6ca1\u6709\u9488\u5bf9\u8fd9\u4e00\u7c7b\u7684\u81ea\u52a8\u94fe\u8def\u3002",
+  actionMore: "\u66f4\u591a\u64cd\u4f5c",
   workbenchMetricArtifacts: "\u9644\u4ef6",
   workbenchMetricGenerated: "\u751f\u6210",
   workbenchMetricFlags: "\u5019\u9009",
@@ -63,6 +65,10 @@ const STRINGS = {
   toolTitle: "\u914d\u5408\u4f7f\u7528",
   toolInstalled: "\u5df2\u63a5\u5165",
   toolMissing: "\u672a\u5b89\u88c5",
+  toolSuggestedTitle: "\u9898\u578b\u5efa\u8bae",
+  toolInstalledTitle: "\u672c\u673a\u53ef\u76f4\u63a5\u8fd0\u884c",
+  toolMissingTitle: "\u5f85\u5b89\u88c5\u589e\u5f3a",
+  toolEmptyInstalled: "\u672a\u68c0\u6d4b\u5230\u53ef\u76f4\u63a5\u8fd0\u884c\u7684\u5916\u90e8\u5de5\u5177\u3002",
   toolMissingNote: "\u5b89\u88c5\u540e\u5bf9\u5e94\u6309\u94ae\u4f1a\u53d8\u6210\u53ef\u6267\u884c\u52a8\u4f5c",
   settingsKicker: "\u8fd0\u884c\u7b56\u7565",
   settingsTitle: "\u9879\u76ee\u57fa\u7ebf",
@@ -145,6 +151,7 @@ const state = {
   activeView: "workspace",
   workbenchFamily: "binary",
   theme: localStorage.getItem("ctf-theme") || "light",
+  isBusy: false,
   artifacts: [],
   analysis: null,
   casebook: {
@@ -358,10 +365,60 @@ function scheduleWorkspaceSave() {
 
 function setStatus(message, kind = "info") {
   elements.statusBanner.textContent = message;
+  elements.statusBanner.dataset.kind = kind;
   elements.statusBanner.classList.remove("is-hidden", "is-error");
   if (kind === "error") {
     elements.statusBanner.classList.add("is-error");
   }
+}
+
+function setButtonDisabled(button, disabled, title = "") {
+  button.disabled = disabled;
+  button.classList.toggle("is-disabled", disabled);
+  button.title = title;
+}
+
+function updateActionAvailability() {
+  const canAnalyze = workspaceHasAnalyzableInput() && !state.isBusy;
+  const analyzeTitle = canAnalyze ? "" : STRINGS.runDisabledHint;
+  setButtonDisabled(elements.runAnalysisButton, !canAnalyze, analyzeTitle);
+  setButtonDisabled(elements.quickRunButton, !canAnalyze, analyzeTitle);
+
+  const canExport = Boolean(state.analysis) && !state.isBusy;
+  setButtonDisabled(elements.exportReportButton, !canExport, canExport ? "" : "\u5148\u8fd0\u884c\u4e00\u6b21\u5206\u6790\u3002");
+  setButtonDisabled(elements.settingsExportReportButton, !canExport, canExport ? "" : "\u5148\u8fd0\u884c\u4e00\u6b21\u5206\u6790\u3002");
+
+  [elements.pickFilesButton, elements.pickFolderButton, elements.quickFilesButton, elements.quickFolderButton, elements.artifactDropzone].forEach((button) => {
+    setButtonDisabled(button, state.isBusy);
+  });
+  elements.body.classList.toggle("is-busy", state.isBusy);
+}
+
+function setBusy(isBusy) {
+  state.isBusy = isBusy;
+  updateActionAvailability();
+}
+
+function renderNavBadges() {
+  elements.navItems.forEach((button) => {
+    let badge = button.querySelector(".nav-count");
+    if (!badge) {
+      badge = document.createElement("span");
+      badge.className = "nav-count";
+      button.append(badge);
+    }
+
+    const view = button.dataset.view;
+    let value = "";
+    if (view === "artifacts" && state.artifacts.length) {
+      value = String(state.artifacts.length);
+    }
+    if (view === "results" && state.analysis) {
+      value = String(state.analysis.flagCandidates?.length || 0);
+    }
+    badge.textContent = value;
+    badge.hidden = !value;
+  });
 }
 
 function renderViewHeader() {
@@ -377,6 +434,7 @@ function renderViewHeader() {
   Object.entries(elements.views).forEach(([view, node]) => {
     node.classList.toggle("is-active", view === state.activeView);
   });
+  renderNavBadges();
 }
 
 function switchView(view) {
@@ -673,7 +731,7 @@ function renderWorkbench(result) {
   queuePanel.className = "workbench-subpanel";
   queuePanel.innerHTML = `<div class="panel-head compact-head"><div><p class="panel-kicker">${STRINGS.workbenchQueueTitle}</p></div></div>`;
   current.artifacts.slice(0, 4).forEach((artifact) => {
-    queuePanel.append(createDetailCard(artifact, { editableEvidence: false }));
+    queuePanel.append(createDetailCard(artifact, { editableEvidence: false, compactActions: true }));
   });
   left.append(queuePanel);
 
@@ -957,30 +1015,111 @@ function renderResults() {
     elements.findingList.append(createDetailCard(artifact, { editableEvidence: false }));
   });
 
-  elements.toolList.innerHTML = "";
-  (result.classification.tools || []).forEach((tool) => {
-    const chip = document.createElement("span");
-    chip.className = "chip tool-chip";
-    chip.textContent = tool;
-    elements.toolList.append(chip);
-  });
-  if (result.toolStatus) {
-    (result.toolStatus.installed || []).forEach((tool) => {
-      const chip = document.createElement("span");
-      chip.className = "chip tool-chip installed";
-      chip.textContent = `${tool.label} · ${STRINGS.toolInstalled}`;
-      elements.toolList.append(chip);
-    });
-    (result.toolStatus.missing || []).slice(0, 8).forEach((tool) => {
-      const chip = document.createElement("span");
-      chip.className = "chip tool-chip missing";
-      chip.title = `${tool.purpose} ${tool.installHint}`;
-      chip.textContent = `${tool.label} · ${STRINGS.toolMissing}`;
-      elements.toolList.append(chip);
+  renderToolPanel(result);
+
+  renderNeedsPanel(result.inferredNeeds);
+}
+
+function createToolChip(label, className = "") {
+  const chip = document.createElement("span");
+  chip.className = `chip tool-chip ${className}`.trim();
+  chip.textContent = label;
+  return chip;
+}
+
+function createToolStatusCard(title, items, className, emptyText) {
+  const card = document.createElement("section");
+  card.className = `tool-status-card ${className}`;
+
+  const heading = document.createElement("strong");
+  heading.textContent = `${title} · ${items.length}`;
+  card.append(heading);
+
+  const list = document.createElement("div");
+  list.className = "tool-items";
+  if (!items.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-copy";
+    empty.textContent = emptyText;
+    list.append(empty);
+  } else {
+    items.slice(0, 8).forEach((tool) => {
+      const chip = createToolChip(tool.label, className);
+      chip.title = tool.available ? tool.path || tool.purpose : `${tool.purpose} ${tool.installHint}`;
+      list.append(chip);
     });
   }
 
-  renderNeedsPanel(result.inferredNeeds);
+  card.append(list);
+  return card;
+}
+
+function renderToolPanel(result) {
+  elements.toolList.innerHTML = "";
+
+  const suggested = document.createElement("section");
+  suggested.className = "tool-suggested";
+  const suggestedTitle = document.createElement("strong");
+  suggestedTitle.textContent = STRINGS.toolSuggestedTitle;
+  const suggestedRow = document.createElement("div");
+  suggestedRow.className = "classification-tool-row";
+  (result.classification.tools || []).forEach((tool) => {
+    suggestedRow.append(createToolChip(tool));
+  });
+  suggested.append(suggestedTitle, suggestedRow);
+  elements.toolList.append(suggested);
+
+  if (!result.toolStatus) {
+    return;
+  }
+
+  const grid = document.createElement("div");
+  grid.className = "tool-status-grid";
+  grid.append(
+    createToolStatusCard(STRINGS.toolInstalledTitle, result.toolStatus.installed || [], "installed", STRINGS.toolEmptyInstalled),
+    createToolStatusCard(STRINGS.toolMissingTitle, result.toolStatus.missing || [], "missing", STRINGS.toolMissingNote),
+  );
+  elements.toolList.append(grid);
+}
+
+function createArtifactActionButton(action, artifact, className = "") {
+  const actionButton = document.createElement("button");
+  actionButton.className = `text-link artifact-action ${className}`.trim();
+  actionButton.type = "button";
+  actionButton.textContent = action.label;
+  actionButton.title = STRINGS.artifactProcess;
+  actionButton.disabled = state.isBusy;
+  actionButton.addEventListener("click", () => {
+    runArtifactAction(action.id, artifact.path);
+  });
+  return actionButton;
+}
+
+function appendArtifactActionButtons(container, artifact, options = {}) {
+  const actionItems = artifact.actions || [];
+  const visibleCount = options.compactActions ? 1 : 2;
+  actionItems.slice(0, visibleCount).forEach((action, index) => {
+    container.append(createArtifactActionButton(action, artifact, index === 0 ? "primary-action" : ""));
+  });
+
+  const hiddenActions = actionItems.slice(visibleCount);
+  if (!hiddenActions.length) {
+    return;
+  }
+
+  const menu = document.createElement("details");
+  menu.className = "action-menu";
+  const summary = document.createElement("summary");
+  summary.textContent = `${STRINGS.actionMore} ${hiddenActions.length}`;
+  menu.append(summary);
+
+  const menuBody = document.createElement("div");
+  menuBody.className = "action-menu-body";
+  hiddenActions.forEach((action) => {
+    menuBody.append(createArtifactActionButton(action, artifact));
+  });
+  menu.append(menuBody);
+  container.append(menu);
 }
 
 function createDetailCard(artifact, options = {}) {
@@ -1003,7 +1142,7 @@ function createDetailCard(artifact, options = {}) {
   actions.className = "detail-actions";
 
   const openButton = document.createElement("button");
-  openButton.className = "text-link";
+  openButton.className = "text-link artifact-action open-action";
   openButton.type = "button";
   openButton.textContent = STRINGS.artifactOpen;
   openButton.addEventListener("click", () => {
@@ -1012,17 +1151,7 @@ function createDetailCard(artifact, options = {}) {
   actions.append(openButton);
 
   if (artifact.actions && artifact.actions.length) {
-    artifact.actions.forEach((action) => {
-      const actionButton = document.createElement("button");
-      actionButton.className = "text-link";
-      actionButton.type = "button";
-      actionButton.textContent = action.label;
-      actionButton.title = STRINGS.artifactProcess;
-      actionButton.addEventListener("click", () => {
-        runArtifactAction(action.id, artifact.path);
-      });
-      actions.append(actionButton);
-    });
+    appendArtifactActionButtons(actions, artifact, options);
   }
 
   head.append(actions);
@@ -1079,16 +1208,23 @@ function createDetailCard(artifact, options = {}) {
 }
 
 async function runArtifactAction(actionId, filePath) {
+  if (state.isBusy) {
+    return;
+  }
+  setBusy(true);
   try {
     setStatus(STRINGS.statusActionRunning);
     const result = await window.ctfCompass.runArtifactAction({ actionId, filePath });
     if (result.generatedArtifacts && result.generatedArtifacts.length) {
       state.artifacts = uniqArtifacts(state.artifacts.concat(result.generatedArtifacts));
     }
-    await runAnalysis();
-    setStatus(result.message || STRINGS.statusActionDone);
+    setBusy(false);
+    await runAnalysis({ doneMessage: result.message || STRINGS.statusActionDone });
+    return;
   } catch (error) {
     setStatus(`${STRINGS.statusErrorPrefix} ${error.message}`, "error");
+  } finally {
+    setBusy(false);
   }
 }
 
@@ -1116,6 +1252,7 @@ function renderAll() {
   renderResults();
   renderArtifactDetails();
   renderRoadmap();
+  updateActionAvailability();
 }
 
 function splitTags(value) {
@@ -1127,6 +1264,15 @@ function splitTags(value) {
 
 async function runAnalysis(options = {}) {
   const { focusResults = true, doneMessage = STRINGS.statusDone } = options;
+  if (!workspaceHasAnalyzableInput()) {
+    switchView("workspace");
+    setStatus(STRINGS.runDisabledHint, "error");
+    return;
+  }
+  if (state.isBusy) {
+    return;
+  }
+  setBusy(true);
   try {
     setStatus(STRINGS.statusAnalyzing);
     const result = await window.ctfCompass.analyzeChallenge({
@@ -1147,10 +1293,16 @@ async function runAnalysis(options = {}) {
     setStatus(doneMessage);
   } catch (error) {
     setStatus(`${STRINGS.statusErrorPrefix} ${error.message}`, "error");
+  } finally {
+    setBusy(false);
   }
 }
 
 async function appendPreparedArtifacts(promise) {
+  if (state.isBusy) {
+    return;
+  }
+  setBusy(true);
   try {
     const items = await promise;
     if (items.length) {
@@ -1161,6 +1313,8 @@ async function appendPreparedArtifacts(promise) {
     }
   } catch (error) {
     setStatus(`${STRINGS.statusErrorPrefix} ${error.message}`, "error");
+  } finally {
+    setBusy(false);
   }
 }
 
@@ -1377,6 +1531,7 @@ elements.artifactDropzone.addEventListener("click", () => appendPreparedArtifact
 [elements.titleInput, elements.tagsInput, elements.descriptionInput, elements.notesInput, elements.caseSummaryInput].forEach((input) => {
   input.addEventListener("input", () => {
     state.casebook.summary = elements.caseSummaryInput.value.trim();
+    updateActionAvailability();
     scheduleWorkspaceSave();
   });
 });
