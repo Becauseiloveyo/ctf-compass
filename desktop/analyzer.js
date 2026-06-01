@@ -8,7 +8,7 @@ const ExifParser = require("exif-parser");
 const jpeg = require("jpeg-js");
 const jsQR = require("jsqr");
 const { PNG } = require("pngjs");
-const { getToolActionsForArtifact, getToolStatusSummary, runToolAction } = require("./toolkit");
+const { getToolActionsForArtifact, getToolStatusSummary, isToolActionAutoRunnable, runToolAction } = require("./toolkit");
 
 const MAX_FILES = 160;
 const MAX_SAMPLE_BYTES = 1024 * 1024;
@@ -185,14 +185,6 @@ const COPY = {
     forensic: ["Wireshark", "Autopsy", "binwalk", "exiftool"],
     misc: ["CyberChef", "binwalk", "zsteg", "Wireshark"],
   },
-  needs: [
-    "\u6587\u4ef6\u4f18\u5148\u5de5\u4f5c\u6d41\uff1a\u9898\u76ee\u4e0d\u5e94\u53ea\u6709\u6807\u9898\u548c\u63cf\u8ff0\uff0c\u9644\u4ef6\u5e94\u8be5\u662f\u4e00\u7b49\u8f93\u5165\u3002",
-    "\u9644\u4ef6\u5206\u578b\u89e3\u6790\uff1a\u56fe\u50cf\u3001\u6587\u672c\u3001\u538b\u7f29\u5305\u3001ELF\u3001pcap \u9700\u8981\u4e0d\u540c\u5206\u6790\u8def\u5f84\u3002",
-    "flag \u5019\u9009\u63d0\u53d6\uff1a\u8981\u80fd\u4ece strings\u3001base64\u3001hex\u3001http \u8f7d\u8377\u4e2d\u81ea\u52a8\u62bd\u53d6\u53ef\u80fd\u503c\u3002",
-    "\u6d41\u91cf\u5de5\u4f5c\u53f0\uff1a\u9700\u8981\u7ed9 pcap/pcapng \u5355\u72ec\u7684\u4f1a\u8bdd\u3001HTTP\u3001DNS\u3001\u5bfc\u51fa\u5bf9\u8c61\u89c6\u89d2\u3002",
-    "\u8bc1\u636e\u8bb0\u5f55\uff1a\u5bf9\u6bcf\u4e2a\u9644\u4ef6\u8bb0\u5f55\u53ef\u7591\u70b9\u3001\u5019\u9009 flag \u548c\u4eba\u5de5\u7ed3\u8bba\u3002",
-    "\u79bb\u7ebf\u53ef\u5206\u53d1\uff1a\u6253\u5305\u540e\u4e0d\u5e94\u4f9d\u8d56\u5916\u90e8 Python \u6216\u989d\u5916\u73af\u5883\u3002",
-  ],
 };
 
 const CATEGORY_RULES = {
@@ -4335,6 +4327,135 @@ function buildQuickFindings(artifacts, flagCandidates, pipelineLog) {
   return findings;
 }
 
+function scoreFlagCandidate(candidate) {
+  const value = String(candidate.value || "");
+  const source = String(candidate.source || "");
+  let score = 0.62;
+
+  if (KNOWN_FLAG_PREFIX.test(value)) {
+    score += 0.22;
+  }
+  if (/^(?:flag|ctf|picoctf)\{/i.test(value)) {
+    score += 0.08;
+  }
+  if (/metadata|strings|lsb|png|jpeg|http|dns|ciphey|zsteg|binwalk|text|payload/i.test(source)) {
+    score += 0.04;
+  }
+  if (value.length > 180 || /\s{2,}/.test(value)) {
+    score -= 0.18;
+  }
+
+  return Math.max(0.25, Math.min(0.98, score));
+}
+
+function collectRelevantMissingTools(artifacts) {
+  const byTool = new Map();
+  artifacts.forEach((artifact) => {
+    (artifact.toolActions || []).forEach((toolAction) => {
+      if (toolAction.available) {
+        return;
+      }
+      const key = toolAction.tool || toolAction.toolLabel;
+      const current = byTool.get(key) || {
+        tool: toolAction.tool,
+        label: toolAction.toolLabel,
+        purpose: toolAction.purpose,
+        installHint: toolAction.installHint,
+        homepage: toolAction.homepage,
+        actions: [],
+      };
+      current.actions.push(toolAction.label);
+      byTool.set(key, current);
+    });
+  });
+
+  return Array.from(byTool.values()).map((item) => ({
+    ...item,
+    actions: dedupeStrings(item.actions).slice(0, 4),
+  }));
+}
+
+function buildSolverResult(artifacts, flagCandidates, pipelineLog, pipelineErrors, toolStatus) {
+  const byValue = new Map();
+  flagCandidates.forEach((candidate) => {
+    const value = String(candidate.value || "");
+    if (!value) {
+      return;
+    }
+    const scored = {
+      ...candidate,
+      score: scoreFlagCandidate(candidate),
+      sources: [candidate.source].filter(Boolean),
+    };
+    const existing = byValue.get(value);
+    if (!existing || scored.score > existing.score) {
+      byValue.set(value, {
+        ...scored,
+        sources: dedupeStrings([...(existing?.sources || []), ...scored.sources]),
+      });
+      return;
+    }
+    existing.sources = dedupeStrings([...(existing.sources || []), ...scored.sources]);
+  });
+  const rankedCandidates = Array.from(byValue.values())
+    .map((candidate) => ({
+      ...candidate,
+      source: candidate.sources?.length ? candidate.sources.join(" / ") : candidate.source,
+    }))
+    .sort((left, right) => right.score - left.score);
+  const primaryFlag = rankedCandidates[0] || null;
+  const missingTools = collectRelevantMissingTools(artifacts);
+  const failedActions = (pipelineErrors || []).slice(0, 5);
+  const installedToolCount = (toolStatus?.installed || []).length;
+  const nextActions = [];
+
+  if (primaryFlag) {
+    nextActions.push("验证候选 flag 的来源文件和格式，确认是否可直接提交。");
+    if (rankedCandidates.length > 1) {
+      nextActions.push("存在多个候选值时，优先选择格式更完整、来源更直接的结果。");
+    }
+    return {
+      status: "solved",
+      title: "已找到 flag 候选",
+      summary: `自动流水线找到了 ${rankedCandidates.length} 个候选值，优先结果来自：${primaryFlag.source}。`,
+      primaryFlag,
+      candidates: rankedCandidates,
+      confidence: primaryFlag.score,
+      actionsRun: pipelineLog.length,
+      artifactCount: artifacts.length,
+      missingTools,
+      failedActions,
+      nextActions,
+    };
+  }
+
+  if (missingTools.length) {
+    nextActions.push(`安装或加入 PATH：${missingTools.slice(0, 5).map((item) => item.label).join(" / ")}，然后重新运行自动求解。`);
+  }
+  if (failedActions.length) {
+    nextActions.push("检查失败的自动动作输出，优先处理超时、缺依赖、加密压缩包或损坏附件。");
+  }
+  nextActions.push("补充原始附件、压缩包密码、题目提示或已知 flag 格式后重跑。");
+
+  const status = pipelineLog.length || installedToolCount ? "partial" : "blocked";
+  return {
+    status,
+    title: status === "partial" ? "已自动处理，暂未命中 flag" : "缺少可继续自动化的输入",
+    summary:
+      status === "partial"
+        ? `已执行 ${pipelineLog.length} 个本地动作并递归扫描 ${artifacts.length} 个文件，但没有抽取到可提交 flag。`
+        : "当前输入不足或缺少必要工具，暂时无法继续自动求解。",
+    primaryFlag: null,
+    candidates: [],
+    confidence: status === "partial" ? 0.46 : 0.28,
+    actionsRun: pipelineLog.length,
+    artifactCount: artifacts.length,
+    missingTools,
+    failedActions,
+    nextActions,
+  };
+}
+
 function collectPaths(entries, maxFiles = MAX_FILES) {
   const unique = new Set();
   const files = [];
@@ -5367,6 +5488,9 @@ async function runArtifactActionInternal(actionId, filePath, outputRoot) {
 }
 
 function shouldAutoRun(actionId, artifact) {
+  if (String(actionId || "").startsWith("tool:")) {
+    return artifact.depth === 0 && isToolActionAutoRunnable(actionId);
+  }
   if (actionId === "extract-appended-zip" || actionId === "extract-appended-payloads") {
     return true;
   }
@@ -5433,6 +5557,7 @@ async function buildPipelineArtifacts(rootPaths, outputRoot) {
   const seen = new Set();
   const artifacts = [];
   const pipelineLog = [];
+  const pipelineErrors = [];
 
   while (queue.length && artifacts.length < MAX_FILES) {
     const current = queue.shift();
@@ -5480,13 +5605,19 @@ async function buildPipelineArtifacts(rootPaths, outputRoot) {
             parentPath: artifact.path,
           });
         });
-      } catch (_error) {
-        // optional derivation; ignore failures
+      } catch (error) {
+        pipelineErrors.push({
+          actionId: action.id,
+          actionLabel: action.label,
+          sourcePath: artifact.path,
+          sourceName: artifact.name,
+          message: error?.message || String(error),
+        });
       }
     }
   }
 
-  return { artifacts, pipelineLog };
+  return { artifacts, pipelineLog, pipelineErrors };
 }
 
 async function analyzeChallenge(payload, outputRoot) {
@@ -5523,6 +5654,7 @@ async function analyzeChallenge(payload, outputRoot) {
   const classification = classifyChallenge({ title, description, notes, tags }, pipeline.artifacts);
   const quickFindings = buildQuickFindings(pipeline.artifacts, allFlagCandidates, pipeline.pipelineLog);
   const toolStatus = getToolStatusSummary();
+  const solver = buildSolverResult(pipeline.artifacts, allFlagCandidates, pipeline.pipelineLog, pipeline.pipelineErrors, toolStatus);
   const warnings = [];
 
   if (collection.truncated) {
@@ -5540,11 +5672,12 @@ async function analyzeChallenge(payload, outputRoot) {
     classification,
     artifacts: pipeline.artifacts,
     pipelineLog: pipeline.pipelineLog,
+    pipelineErrors: pipeline.pipelineErrors,
+    solver,
     quickFindings,
     flagCandidates: allFlagCandidates,
     warnings,
     toolStatus,
-    inferredNeeds: COPY.needs,
     emptyFlagMessage: COPY.app.noFlags,
   };
 }

@@ -16,9 +16,10 @@ This project is intentionally limited to legitimate CTF training workflows:
 - automatically extract PDF metadata, XMP packets, readable Flate streams, and OOXML/Office package contents for recursive local analysis
 - automatically inspect WAV metadata, PCM LSB candidates, tone / morse hints, and waveform / spectrogram views for audio-based local challenges
 - automatically inspect ELF / PE / APK attachments, extracting headers, sections, imports / exports, symbol / relocation summaries, interpreter / shared-library hints, manifest strings, DEX method indexes, Android string-pool resources, and unpacked package contents for recursive local analysis
-- detect local professional CTF tools on PATH and expose real executable actions instead of placeholder guidance
-- run installed tool adapters for ExifTool, binwalk, zsteg, TShark, Ciphey, rabin2, jadx, and apktool, then import generated output back into the workspace
+- detect local professional CTF tools on PATH and auto-run safe adapters instead of showing placeholder guidance
+- run installed tool adapters for ExifTool, binwalk, zsteg, TShark, Ciphey, rabin2, jadx, and apktool, then import generated output back into the recursive solver
 - show missing tool status and installation hints per artifact so the user knows exactly why a deeper action is unavailable
+- produce a solver status: solved, partially solved, or blocked, with the highest-confidence flag candidate and concrete next action
 - start each launch with a fresh empty workspace so previous attachments and challenge text are not restored automatically
 - isolate generated files, temporary sessions, future portable tool downloads, and local helper assets under one sandbox directory that can be opened or cleared from Settings
 - export Markdown investigation reports that include classification, pipeline output, final flag, and artifact-level notebook entries
@@ -42,7 +43,7 @@ This project does **not** target real-world systems and should not be used for u
 CTF Compass uses a two-layer workflow:
 
 - Built-in analyzers handle deterministic local tasks such as recursive ZIP/GZIP extraction, strings, encoded text layers, PNG text chunks, PNG LSB candidates, QR/barcode detection, basic pcap triage, PDF/Office unpacking, WAV clues, and ELF/PE/APK structure summaries.
-- External tool adapters run mature local tools when they are installed. The app detects each command on PATH and only shows executable buttons for tools that can actually run.
+- External tool adapters run mature local tools when they are installed. Safe scan/extract adapters are executed automatically during solver runs, while heavier decompile/export actions remain available from each artifact card.
 
 Supported adapters:
 
@@ -55,7 +56,7 @@ Supported adapters:
 - `jadx`: APK/DEX Java decompilation
 - `apktool`: APK resource and smali unpacking
 
-If a tool is missing, the artifact card shows it as `未安装` with the install direction. After installing and reopening/rerunning analysis, the matching action button becomes available.
+If a tool is missing, the artifact card and solver panel show it as `未安装` with the install direction. After installing and reopening/rerunning analysis, the matching action becomes available and can participate in automatic solving.
 
 ## Sandbox Mode
 
@@ -90,7 +91,7 @@ npm run dist:dir
 
 The unpacked Windows app will be written to `release/win-unpacked/`.
 
-A downloadable zip can be created from the unpacked build. The current local package name is `release/CTF-Compass-0.4.2-win-x64.zip`.
+A downloadable zip can be created from the unpacked build. The current local package name is `release/CTF-Compass-0.4.3-win-x64.zip`.
 
 ## Next Steps
 

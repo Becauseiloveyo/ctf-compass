@@ -10,7 +10,7 @@ const STRINGS = {
   exportReportButton: "\u5bfc\u51fa\u62a5\u544a",
   addFilesButton: "\u6dfb\u52a0\u6587\u4ef6",
   addFolderButton: "\u6dfb\u52a0\u6587\u4ef6\u5939",
-  runAnalysisButton: "\u7acb\u5373\u5206\u6790",
+  runAnalysisButton: "自动求解",
   runDisabledHint: "\u5148\u6dfb\u52a0\u9644\u4ef6\u6216\u586b\u5199\u9898\u9762\uff0c\u518d\u5f00\u59cb\u5206\u6790\u3002",
   quickFilesTitle: "\u6dfb\u52a0\u6587\u4ef6",
   quickFilesNote: "\u56fe\u50cf\u3001txt\u3001zip\u3001ELF\u3001pcap \u90fd\u53ef\u4ee5\u76f4\u63a5\u62d6\u8fdb\u6765",
@@ -18,8 +18,8 @@ const STRINGS = {
   quickFolderNote: "\u9002\u5408\u6709\u591a\u4e2a\u9644\u4ef6\u6216\u5bfc\u51fa\u6587\u4ef6\u7684\u9898\u76ee",
   quickPasteTitle: "\u8865\u5145\u7ebf\u7d22",
   quickPasteNote: "\u628a\u9898\u9762\u3001hint\u3001\u5df2\u6709\u53d1\u73b0\u7c98\u8d34\u8fdb\u6765",
-  quickRunTitle: "\u5f00\u59cb\u5206\u6d41",
-  quickRunNote: "\u5148\u627e flag \u5019\u9009\uff0c\u518d\u7ed9\u9898\u578b\u8def\u5f84\u548c\u5de5\u5177\u5efa\u8bae",
+  quickRunTitle: "自动求解",
+  quickRunNote: "递归提取、解码、扫描附件，并直接寻找 flag 候选",
   workspacePanelKicker: "\u9898\u76ee\u5de5\u4f5c\u53f0",
   workspacePanelTitle: "\u9898\u9762\u4e0e\u7ebf\u7d22",
   workspacePanelBadge: "\u79bb\u7ebf\u672c\u5730",
@@ -33,9 +33,18 @@ const STRINGS = {
   dropzoneNote: "\u56fe\u7247\u3001\u6587\u672c\u3001\u538b\u7f29\u5305\u3001ELF\u3001pcap/pcapng \u4f1a\u88ab\u4f5c\u4e3a\u4e00\u7b49\u8f93\u5165",
   discoveryKicker: "\u81ea\u52a8\u53d1\u73b0",
   discoveryTitle: "\u5f53\u524d\u7ebf\u7d22",
-  needsKicker: "\u9700\u6c42\u62c6\u89e3",
-  needsTitle: "\u4f60\u771f\u6b63\u9700\u8981\u7684\u80fd\u529b",
-  summaryKicker: "\u7ed3\u679c\u6458\u8981",
+  summaryKicker: "求解摘要",
+  solverWaitingTitle: "等待自动求解",
+  solverWaitingNote: "添加附件后运行，应用会先用内置流水线处理；检测到可用外部工具时会自动调用。",
+  solverStatusSolved: "已找到候选",
+  solverStatusPartial: "继续补充",
+  solverStatusBlocked: "需要介入",
+  solverPrimaryFlag: "最高可信候选",
+  solverNoFlag: "暂未命中 flag",
+  solverRunMeta: "自动动作",
+  solverArtifactMeta: "扫描文件",
+  solverMissingTools: "建议安装",
+  solverFailedActions: "失败动作",
   workbenchKicker: "\u4e13\u9898\u9762\u677f",
   workbenchTitle: "\u6309\u9644\u4ef6\u65cf\u7fa4\u62c6\u5f00\u7684\u5de5\u4f5c\u53f0",
   pipelineKicker: "\u81ea\u52a8\u5904\u7406",
@@ -69,7 +78,7 @@ const STRINGS = {
   toolInstalledTitle: "\u672c\u673a\u53ef\u76f4\u63a5\u8fd0\u884c",
   toolMissingTitle: "\u5f85\u5b89\u88c5\u589e\u5f3a",
   toolEmptyInstalled: "\u672a\u68c0\u6d4b\u5230\u53ef\u76f4\u63a5\u8fd0\u884c\u7684\u5916\u90e8\u5de5\u5177\u3002",
-  toolMissingNote: "\u5b89\u88c5\u540e\u5bf9\u5e94\u6309\u94ae\u4f1a\u53d8\u6210\u53ef\u6267\u884c\u52a8\u4f5c",
+  toolMissingNote: "安装后会自动参与本地求解，也可在附件卡片中手动执行",
   settingsKicker: "\u8fd0\u884c\u7b56\u7565",
   settingsTitle: "\u9879\u76ee\u57fa\u7ebf",
   settingsThemeTitle: "\u754c\u9762\u98ce\u683c",
@@ -91,20 +100,18 @@ const STRINGS = {
   settingsWorkspaceTitle: "\u5de5\u4f5c\u533a\u7ba1\u7406",
   settingsWorkspaceNote: "\u53ef\u4ee5\u5bfc\u51fa Markdown \u62a5\u544a\uff0c\u6216\u76f4\u63a5\u6e05\u7a7a\u5f53\u524d\u8c03\u67e5\u7ebf\u7d22\u3002",
   clearWorkspaceButton: "\u6e05\u7a7a\u5de5\u4f5c\u533a",
-  roadmapKicker: "\u5b8c\u5584\u65b9\u5411",
-  roadmapTitle: "\u4e0b\u4e00\u6b65\u5e94\u7ee7\u7eed\u505a",
   emptyArtifactPreview: "\u8fd8\u6ca1\u6709\u6dfb\u52a0\u9644\u4ef6\u3002",
   emptyArtifactDetail: "\u6ca1\u6709\u53ef\u5c55\u793a\u7684\u9644\u4ef6\uff0c\u5148\u6dfb\u52a0\u6587\u4ef6\u6216\u6587\u4ef6\u5939\u3002",
   emptyResultsCategory: "\u7b49\u5f85\u5206\u6790",
-  emptyResultsSummary: "\u8fd9\u91cc\u4f1a\u7ed9\u51fa\u9898\u578b\u5224\u65ad\u3001\u4f9d\u636e\u548c\u9644\u4ef6\u5206\u6d41\u5efa\u8bae\u3002",
+  emptyResultsSummary: "运行后会显示自动动作、候选 flag 和仍需人工补充的信息。",
   emptyFlags: "\u6682\u65e0 flag \u5019\u9009\u3002",
-  emptyPipeline: "\u8fd8\u6ca1\u6709\u81ea\u52a8\u751f\u6210\u7684\u884d\u751f\u6587\u4ef6\u3002",
+  emptyPipeline: "还没有执行自动动作。",
   statusReady: "\u5148\u6dfb\u52a0\u9898\u76ee\u4fe1\u606f\u6216\u9644\u4ef6\uff0c\u518d\u8fdb\u884c\u5206\u6790\u3002",
-  statusAnalyzing: "\u6b63\u5728\u5206\u6790\u9644\u4ef6\u548c\u9898\u76ee\u7ebf\u7d22...",
-  statusDone: "\u5df2\u5b8c\u6210\u672c\u5730\u5206\u6d41\u4e0e\u5019\u9009\u63d0\u53d6\u3002",
+  statusAnalyzing: "正在自动求解附件和题目线索...",
+  statusDone: "已完成本地自动求解与候选提取。",
   statusArtifactAdded: "\u9644\u4ef6\u5df2\u66f4\u65b0\uff0c\u53ef\u4ee5\u91cd\u65b0\u5206\u6790\u3002",
   statusFocusDescription: "\u8bf7\u76f4\u63a5\u7c98\u8d34\u9898\u9762\u3001hint \u6216\u5f53\u524d\u89c2\u5bdf\u5230\u7684\u53ef\u7591\u70b9\u3002",
-  statusActionRunning: "\u6b63\u5728\u5904\u7406\u53ef\u81ea\u52a8\u6267\u884c\u7684\u7ebf\u7d22...",
+  statusActionRunning: "正在执行可自动处理的线索...",
   statusActionDone: "\u5df2\u751f\u6210\u65b0\u7684\u884d\u751f\u6587\u4ef6\uff0c\u5e76\u5df2\u91cd\u65b0\u5206\u6790\u3002",
   statusWorkspaceRestored: "\u5df2\u542f\u52a8\u65b0\u4f1a\u8bdd\uff0c\u4e0a\u6b21\u9644\u4ef6\u4e0d\u4f1a\u81ea\u52a8\u6062\u590d\u3002",
   statusWorkspaceCleared: "\u5f53\u524d\u5de5\u4f5c\u533a\u5df2\u6e05\u7a7a\u3002",
@@ -145,14 +152,6 @@ const VIEW_COPY = {
     title: "\u9879\u76ee\u57fa\u7ebf\u4e0e\u6253\u5305\u7b56\u7565",
   },
 };
-
-const ROADMAP_ITEMS = [
-  "\u628a PDF / Office \u4e5f\u62c6\u6210\u4e13\u9898\u5de5\u4f5c\u9762\u677f\uff0c\u8ba9\u6587\u6863\u7c7b\u9898\u76ee\u4e0d\u518d\u843d\u5728\u901a\u7528\u5361\u7247\u91cc\u3002",
-  "\u4e3a APK \u7ee7\u7eed\u8865\u4e8c\u8fdb\u5236 AXML \u7ed3\u6784\u3001resource id \u6620\u5c04\u548c\u66f4\u5b8c\u6574\u7684 DEX method/proto \u89c6\u56fe\u3002",
-  "\u4e3a ELF / PE \u8865 symbol \u53ef\u89c1\u6027\u3001reloc \u8be6\u60c5\u3001export/import \u5206\u7ec4\u548c\u4fdd\u62a4\u9879\u63d0\u793a\u3002",
-  "\u628a\u5de5\u4f5c\u9762\u677f\u505a\u6210\u53ef\u76f4\u63a5\u8054\u52a8\u52a8\u4f5c\u3001\u8bc1\u636e\u7b14\u8bb0\u548c\u7ed3\u679c\u8fc7\u6ee4\u7684\u4e13\u9898\u9875\u3002",
-  "\u6dfb\u52a0\u6269\u5c55\u5f0f\u5206\u6790\u5668\u4e0e\u53d1\u5e03\u6d41\u7a0b\uff0c\u8ba9\u540e\u7eed\u89c4\u5219\u548c\u6253\u5305\u66f4\u5bb9\u6613\u8fed\u4ee3\u3002",
-];
 
 const state = {
   activeView: "workspace",
@@ -210,12 +209,12 @@ const elements = {
   artifactCountPill: document.getElementById("artifact-count-pill"),
   artifactPreviewList: document.getElementById("artifact-preview-list"),
   discoveryList: document.getElementById("discovery-list"),
-  needsList: document.getElementById("needs-list"),
   artifactDetailList: document.getElementById("artifact-detail-list"),
   summaryCategory: document.getElementById("summary-category"),
   summaryConfidence: document.getElementById("summary-confidence"),
   summaryText: document.getElementById("summary-text"),
   summaryEvidence: document.getElementById("summary-evidence"),
+  solverCard: document.getElementById("solver-card"),
   workbenchTabs: document.getElementById("workbench-tabs"),
   workbenchPanel: document.getElementById("workbench-panel"),
   pipelineList: document.getElementById("pipeline-list"),
@@ -225,7 +224,6 @@ const elements = {
   toolList: document.getElementById("tool-list"),
   sandboxPath: document.getElementById("sandbox-path"),
   sandboxSize: document.getElementById("sandbox-size"),
-  roadmapList: document.getElementById("roadmap-list"),
 };
 
 function applyStaticCopy() {
@@ -579,24 +577,6 @@ function renderDiscoveryPanel() {
   });
 }
 
-function renderNeedsPanel(items) {
-  elements.needsList.innerHTML = "";
-  items.forEach((item) => {
-    const li = document.createElement("li");
-    li.textContent = item;
-    elements.needsList.append(li);
-  });
-}
-
-function renderRoadmap() {
-  elements.roadmapList.innerHTML = "";
-  ROADMAP_ITEMS.forEach((item) => {
-    const li = document.createElement("li");
-    li.textContent = item;
-    elements.roadmapList.append(li);
-  });
-}
-
 function sortArtifactsForDisplay(items) {
   return [...items].sort((left, right) => {
     const leftPinned = getEvidenceEntry(left.path).pinned ? 1 : 0;
@@ -847,6 +827,106 @@ function createFlagCard(candidate, isFinal) {
   return row;
 }
 
+function solverStatusLabel(status) {
+  if (status === "solved") {
+    return STRINGS.solverStatusSolved;
+  }
+  if (status === "partial") {
+    return STRINGS.solverStatusPartial;
+  }
+  return STRINGS.solverStatusBlocked;
+}
+
+function renderSolverCard(solver) {
+  if (!elements.solverCard) {
+    return;
+  }
+
+  elements.solverCard.innerHTML = "";
+  const card = document.createElement("section");
+  card.className = `solver-card-inner solver-${solver?.status || "waiting"}`;
+
+  if (!solver) {
+    card.innerHTML = `<div class="solver-head"><strong>${STRINGS.solverWaitingTitle}</strong></div><p>${STRINGS.solverWaitingNote}</p>`;
+    elements.solverCard.append(card);
+    return;
+  }
+
+  const confidence = Number(solver.confidence || 0).toFixed(2);
+  const head = document.createElement("div");
+  head.className = "solver-head";
+  head.innerHTML = `<div><span class="solver-status">${escapeHtml(solverStatusLabel(solver.status))}</span><strong>${escapeHtml(
+    solver.title || STRINGS.solverNoFlag,
+  )}</strong></div><span class="solver-score">${confidence}</span>`;
+  card.append(head);
+
+  const summary = document.createElement("p");
+  summary.textContent = solver.summary || "";
+  card.append(summary);
+
+  const meta = document.createElement("div");
+  meta.className = "solver-meta";
+  meta.innerHTML = `<span>${STRINGS.solverRunMeta}: ${Number(solver.actionsRun || 0)}</span><span>${STRINGS.solverArtifactMeta}: ${Number(
+    solver.artifactCount || 0,
+  )}</span>`;
+  card.append(meta);
+
+  if (solver.primaryFlag) {
+    const flagBox = document.createElement("div");
+    flagBox.className = "solver-flag";
+    flagBox.innerHTML = `<span>${STRINGS.solverPrimaryFlag}</span><strong>${escapeHtml(solver.primaryFlag.value)}</strong><small>${escapeHtml(
+      solver.primaryFlag.source || "",
+    )}</small>`;
+
+    const finalButton = document.createElement("button");
+    finalButton.className = "text-link";
+    finalButton.type = "button";
+    finalButton.textContent = STRINGS.flagFinalize;
+    finalButton.addEventListener("click", () => {
+      setFinalFlag(solver.primaryFlag);
+    });
+    flagBox.append(finalButton);
+    card.append(flagBox);
+  }
+
+  if (solver.missingTools?.length) {
+    const missing = document.createElement("div");
+    missing.className = "solver-tool-row";
+    missing.innerHTML = `<span>${STRINGS.solverMissingTools}</span>`;
+    solver.missingTools.slice(0, 5).forEach((tool) => {
+      const chip = createToolChip(tool.label, "missing");
+      chip.title = tool.installHint || tool.purpose || "";
+      missing.append(chip);
+    });
+    card.append(missing);
+  }
+
+  if (solver.failedActions?.length) {
+    const failed = document.createElement("div");
+    failed.className = "solver-failures";
+    failed.innerHTML = `<span>${STRINGS.solverFailedActions}</span>`;
+    solver.failedActions.slice(0, 3).forEach((item) => {
+      const line = document.createElement("small");
+      line.textContent = `${item.actionLabel}: ${item.message}`;
+      failed.append(line);
+    });
+    card.append(failed);
+  }
+
+  if (solver.nextActions?.length) {
+    const next = document.createElement("ul");
+    next.className = "plain-list solver-next";
+    solver.nextActions.slice(0, 4).forEach((item) => {
+      const li = document.createElement("li");
+      li.textContent = item;
+      next.append(li);
+    });
+    card.append(next);
+  }
+
+  elements.solverCard.append(card);
+}
+
 function createEvidenceSummary(filePath) {
   const evidence = getEvidenceEntry(filePath);
   if (!evidence.note && !evidence.pinned && evidence.status === "todo") {
@@ -952,6 +1032,7 @@ function renderResults() {
     elements.summaryConfidence.textContent = "--";
     elements.summaryText.textContent = STRINGS.emptyResultsSummary;
     elements.summaryEvidence.innerHTML = "";
+    renderSolverCard(null);
     elements.workbenchTabs.innerHTML = "";
     elements.workbenchPanel.innerHTML = `<p class="empty-copy">${STRINGS.workbenchNoArtifacts}</p>`;
     elements.pipelineList.innerHTML = `<p class="empty-copy">${STRINGS.emptyPipeline}</p>`;
@@ -959,7 +1040,6 @@ function renderResults() {
     elements.nextList.innerHTML = "";
     elements.findingList.innerHTML = `<p class="empty-copy">${STRINGS.emptyArtifactDetail}</p>`;
     elements.toolList.innerHTML = "";
-    renderNeedsPanel(ROADMAP_ITEMS);
     return;
   }
 
@@ -975,6 +1055,7 @@ function renderResults() {
     chip.textContent = item;
     elements.summaryEvidence.append(chip);
   });
+  renderSolverCard(result.solver);
 
   renderWorkbench(result);
 
@@ -1022,7 +1103,8 @@ function renderResults() {
   }
 
   elements.nextList.innerHTML = "";
-  result.classification.nextMoves.forEach((item) => {
+  const nextItems = result.solver?.nextActions?.length ? result.solver.nextActions : result.classification.nextMoves;
+  nextItems.forEach((item) => {
     const li = document.createElement("li");
     li.textContent = item;
     elements.nextList.append(li);
@@ -1034,8 +1116,6 @@ function renderResults() {
   });
 
   renderToolPanel(result);
-
-  renderNeedsPanel(result.inferredNeeds);
 }
 
 function createToolChip(label, className = "") {
@@ -1269,7 +1349,6 @@ function renderAll() {
   renderDiscoveryPanel();
   renderResults();
   renderArtifactDetails();
-  renderRoadmap();
   updateActionAvailability();
 }
 
@@ -1382,6 +1461,19 @@ function buildReportMarkdown() {
     lines.push("## Analyst Conclusion", "", snapshot.casebook.summary, "");
   }
 
+  if (state.analysis.solver) {
+    const solver = state.analysis.solver;
+    lines.push("## Solver Status", "", `- Status: ${solverStatusLabel(solver.status)}`, `- Confidence: ${Number(solver.confidence || 0).toFixed(2)}`);
+    if (solver.primaryFlag?.value) {
+      lines.push(`- Primary: ${solver.primaryFlag.value} (${solver.primaryFlag.source || "unknown"})`);
+    }
+    if (solver.nextActions?.length) {
+      lines.push("");
+      solver.nextActions.forEach((item) => lines.push(`- ${item}`));
+    }
+    lines.push("");
+  }
+
   lines.push("## Classification", "", state.analysis.classification.reason, "");
 
   if (state.analysis.classification.evidence?.length) {
@@ -1404,9 +1496,10 @@ function buildReportMarkdown() {
     lines.push("");
   }
 
-  if (state.analysis.classification.nextMoves?.length) {
+  const nextSteps = state.analysis.solver?.nextActions?.length ? state.analysis.solver.nextActions : state.analysis.classification.nextMoves;
+  if (nextSteps?.length) {
     lines.push("## Next Steps", "");
-    state.analysis.classification.nextMoves.forEach((item) => lines.push(`- ${item}`));
+    nextSteps.forEach((item) => lines.push(`- ${item}`));
     lines.push("");
   }
 

@@ -20,8 +20,8 @@ const TOOL_DEFINITIONS = {
     label: "binwalk",
     command: "binwalk",
     homepage: "https://github.com/ReFirmLabs/binwalk",
-    installHint: "安装 binwalk 并加入 PATH。Windows 推荐 WSL/Kali 或 Python/Rust 发行版。",
-    purpose: "扫描文件签名、发现嵌入文件和可提取分区。",
+    installHint: "安装 binwalk 并加入 PATH。Windows 推荐 WSL/Kali，或 Python/Rust 发行版。",
+    purpose: "扫描文件签名，发现嵌入文件和可提取分区。",
   },
   zsteg: {
     label: "zsteg",
@@ -55,14 +55,14 @@ const TOOL_DEFINITIONS = {
     label: "jadx",
     command: "jadx",
     homepage: "https://github.com/skylot/jadx",
-    installHint: "安装 Java 17+ 和 jadx，或用 scoop install jadx。",
+    installHint: "安装 Java 17+ 和 jadx，或使用 scoop install jadx。",
     purpose: "把 APK/DEX 反编译为 Java 源码和资源视图。",
   },
   apktool: {
     label: "apktool",
     command: "apktool",
     homepage: "https://apktool.org/",
-    installHint: "安装 Java 和 apktool，或用 scoop/choco 安装 apktool。",
+    installHint: "安装 Java 和 apktool，或使用 scoop/choco 安装 apktool。",
     purpose: "解包 APK 资源、Manifest 和 smali。",
   },
 };
@@ -114,10 +114,12 @@ function findExecutable(command) {
     return null;
   }
 
-  return String(result.stdout || "")
-    .split(/\r?\n/)
-    .map((item) => item.trim())
-    .filter(Boolean)[0] || null;
+  return (
+    String(result.stdout || "")
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean)[0] || null
+  );
 }
 
 function detectToolStatus(refresh = false) {
@@ -187,17 +189,18 @@ function isNativeBinaryArtifact(artifact) {
 }
 
 function quoteCommand(command, args) {
-  return [command, ...args].map((part) => (/\s/.test(part) ? `"${part}"` : part)).join(" ");
+  return [command, ...args].map((part) => (/\s/.test(String(part)) ? `"${part}"` : String(part))).join(" ");
 }
 
 function runCommand(command, args, options = {}) {
   const timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
+    const useShell = process.platform === "win32" && /\.(cmd|bat)$/i.test(command);
     const child = spawn(command, args, {
       cwd: options.cwd,
       windowsHide: true,
-      shell: false,
+      shell: useShell,
     });
 
     let stdout = "";
@@ -287,7 +290,8 @@ function buildOutputName(filePath, suffix) {
 
 async function runSingleReport(action, filePath, outputRoot, status) {
   const args = action.args(filePath, outputRoot);
-  const run = await runCommand(status.command, args, {
+  const command = status.path || status.command;
+  const run = await runCommand(command, args, {
     cwd: outputRoot,
     timeoutMs: action.timeoutMs,
   });
@@ -300,12 +304,13 @@ async function runSingleReport(action, filePath, outputRoot, status) {
 
 async function runMultiReport(action, filePath, outputRoot, status) {
   const sections = [];
-  for (const command of action.commands(filePath, outputRoot)) {
-    const run = await runCommand(status.command, command.args, {
+  const command = status.path || status.command;
+  for (const item of action.commands(filePath, outputRoot)) {
+    const run = await runCommand(command, item.args, {
       cwd: outputRoot,
-      timeoutMs: command.timeoutMs || action.timeoutMs,
+      timeoutMs: item.timeoutMs || action.timeoutMs,
     });
-    sections.push(formatRunReport(command.title, run));
+    sections.push(formatRunReport(item.title, run));
   }
   const outPath = writeTextFile(outputRoot, buildOutputName(filePath, action.outputSuffix), sections.join("\n\n"));
   return {
@@ -318,7 +323,8 @@ async function runDirectoryTool(action, filePath, outputRoot, status) {
   const directory = path.join(outputRoot, `${sanitizeSegment(path.parse(filePath).name)}-${action.outputSuffix}`);
   ensureDir(directory);
   const args = action.args(filePath, directory);
-  const run = await runCommand(status.command, args, {
+  const command = status.path || status.command;
+  const run = await runCommand(command, args, {
     cwd: outputRoot,
     timeoutMs: action.timeoutMs || LONG_TIMEOUT_MS,
   });
@@ -332,9 +338,7 @@ async function runDirectoryTool(action, filePath, outputRoot, status) {
   ].join("\n");
   const manifestPath = writeTextFile(outputRoot, buildOutputName(filePath, `${action.outputSuffix}-manifest`), manifest);
   return {
-    message: discovered.length
-      ? `${action.label} 已生成 ${discovered.length} 个文件，并创建清单。`
-      : `${action.label} 已执行，但没有发现可导入的新文件。`,
+    message: discovered.length ? `${action.label} 已生成 ${discovered.length} 个文件，并创建清单。` : `${action.label} 已执行，但没有发现可导入的新文件。`,
     createdFiles: [manifestPath, ...discovered],
   };
 }
@@ -345,7 +349,8 @@ const TOOL_ACTIONS = [
     tool: "exiftool",
     label: "ExifTool 元数据",
     outputSuffix: "exiftool",
-    appliesTo: (artifact) => ["image", "document", "audio", "binary", "archive", "unknown"].includes(artifact.family),
+    autoRun: true,
+    appliesTo: (artifact) => isImageArtifact(artifact) || ["document", "audio", "binary", "archive", "unknown"].includes(artifact.family),
     args: (filePath) => ["-a", "-u", "-g1", filePath],
     runner: runSingleReport,
   },
@@ -354,6 +359,7 @@ const TOOL_ACTIONS = [
     tool: "binwalk",
     label: "binwalk 签名扫描",
     outputSuffix: "binwalk-scan",
+    autoRun: true,
     appliesTo: isArchiveOrUnknown,
     args: (filePath) => [filePath],
     runner: runSingleReport,
@@ -363,6 +369,7 @@ const TOOL_ACTIONS = [
     tool: "binwalk",
     label: "binwalk 提取嵌入文件",
     outputSuffix: "binwalk-extract",
+    autoRun: true,
     appliesTo: isArchiveOrUnknown,
     args: (filePath, directory) => ["-e", "-C", directory, filePath],
     collectLimit: 60,
@@ -374,6 +381,7 @@ const TOOL_ACTIONS = [
     tool: "zsteg",
     label: "zsteg LSB 扫描",
     outputSuffix: "zsteg",
+    autoRun: true,
     appliesTo: isPngOrBmp,
     args: (filePath) => ["-a", filePath],
     timeoutMs: LONG_TIMEOUT_MS,
@@ -384,6 +392,7 @@ const TOOL_ACTIONS = [
     tool: "ciphey",
     label: "Ciphey 自动解码",
     outputSuffix: "ciphey",
+    autoRun: true,
     appliesTo: isTextLikeArtifact,
     args: (filePath) => ["-q", "-f", filePath],
     timeoutMs: LONG_TIMEOUT_MS,
@@ -394,6 +403,7 @@ const TOOL_ACTIONS = [
     tool: "tshark",
     label: "TShark HTTP 提取",
     outputSuffix: "tshark-http",
+    autoRun: true,
     appliesTo: isTrafficArtifact,
     args: (filePath) => [
       "-r",
@@ -428,6 +438,7 @@ const TOOL_ACTIONS = [
     tool: "tshark",
     label: "TShark DNS 提取",
     outputSuffix: "tshark-dns",
+    autoRun: true,
     appliesTo: isTrafficArtifact,
     args: (filePath) => [
       "-r",
@@ -456,6 +467,7 @@ const TOOL_ACTIONS = [
     tool: "tshark",
     label: "TShark 导出 HTTP 对象",
     outputSuffix: "tshark-http-objects",
+    autoRun: false,
     appliesTo: isTrafficArtifact,
     args: (filePath, directory) => ["-r", filePath, "--export-objects", `http,${directory}`],
     collectLimit: 60,
@@ -467,6 +479,7 @@ const TOOL_ACTIONS = [
     tool: "rabin2",
     label: "rabin2 二进制三件套",
     outputSuffix: "rabin2",
+    autoRun: true,
     appliesTo: isNativeBinaryArtifact,
     commands: (filePath) => [
       { title: "rabin2 header", args: ["-I", filePath] },
@@ -481,6 +494,7 @@ const TOOL_ACTIONS = [
     tool: "jadx",
     label: "jadx 反编译 APK",
     outputSuffix: "jadx",
+    autoRun: false,
     appliesTo: isAndroidArtifact,
     args: (filePath, directory) => ["-d", directory, filePath],
     collectLimit: 30,
@@ -492,6 +506,7 @@ const TOOL_ACTIONS = [
     tool: "apktool",
     label: "apktool 解包资源",
     outputSuffix: "apktool",
+    autoRun: false,
     appliesTo: isAndroidArtifact,
     args: (filePath, directory) => ["d", "-f", "-o", directory, filePath],
     collectLimit: 40,
@@ -499,6 +514,11 @@ const TOOL_ACTIONS = [
     runner: runDirectoryTool,
   },
 ];
+
+function isToolActionAutoRunnable(actionId) {
+  const action = TOOL_ACTIONS.find((item) => item.id === actionId);
+  return Boolean(action?.autoRun);
+}
 
 function getToolActionsForArtifact(artifact, refresh = false) {
   const status = detectToolStatus(refresh);
@@ -514,6 +534,7 @@ function getToolActionsForArtifact(artifact, refresh = false) {
       installHint: toolStatus.installHint,
       homepage: toolStatus.homepage,
       purpose: toolStatus.purpose,
+      autoRun: action.autoRun,
       kind: "external-tool",
     };
   });
@@ -532,7 +553,8 @@ async function runToolAction(actionId, filePath, outputRoot) {
   ensureDir(outputRoot);
   const status = detectToolStatus(true)[action.tool];
   if (!status || !status.available) {
-    throw new Error(`未检测到 ${TOOL_DEFINITIONS[action.tool].label}。${TOOL_DEFINITIONS[action.tool].installHint}`);
+    const definition = TOOL_DEFINITIONS[action.tool];
+    throw new Error(`未检测到 ${definition.label}。${definition.installHint}`);
   }
 
   const result = await action.runner(action, filePath, outputRoot, status);
@@ -556,5 +578,6 @@ module.exports = {
   getToolActionsForArtifact,
   getToolReferences,
   getToolStatusSummary,
+  isToolActionAutoRunnable,
   runToolAction,
 };
