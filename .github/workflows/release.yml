@@ -25,6 +25,8 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Resolve release inputs
@@ -60,7 +62,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release.outputs.tag }}
-          target_commitish: ${{ steps.release.outputs.ref }}
           name: CTF Compass ${{ steps.release.outputs.tag }}
           body: |
             Windows desktop build for CTF Compass ${{ steps.release.outputs.tag }}.
