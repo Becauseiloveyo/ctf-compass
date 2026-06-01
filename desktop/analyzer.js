@@ -187,6 +187,45 @@ const COPY = {
   },
 };
 
+const BUNDLED_TOOL_CAPABILITIES = [
+  {
+    id: "strings-lite",
+    label: "内置 strings-lite",
+    replaces: "strings",
+    purpose: "提取 ASCII / UTF-16 字符串、URL、token 和 flag 样式候选。",
+  },
+  {
+    id: "binwalk-lite",
+    label: "内置 binwalk-lite",
+    replaces: "binwalk scan",
+    purpose: "按魔数扫描 ZIP、GZIP、PNG、PDF、ELF、7Z、RAR 等嵌入载荷并递归提取。",
+  },
+  {
+    id: "ciphey-lite",
+    label: "内置 ciphey-lite",
+    replaces: "Ciphey",
+    purpose: "自动尝试 Base64、Hex、Base32、Ascii85、URL、ROT/Caesar、单字节 XOR 和压缩文本层。",
+  },
+  {
+    id: "zsteg-lite",
+    label: "内置 zsteg-lite",
+    replaces: "zsteg",
+    purpose: "扫描 PNG 文本块与常见 RGB/RGBA 低位平面可读文本候选。",
+  },
+  {
+    id: "tshark-lite",
+    label: "内置 tshark-lite",
+    replaces: "TShark basic",
+    purpose: "离线解析 pcap/pcapng 基础帧、HTTP、DNS、TLS SNI、Cookie/Token 和 HTTP 对象。",
+  },
+  {
+    id: "binary-lite",
+    label: "内置 rabin2/exif-lite",
+    replaces: "rabin2 / exiftool subset",
+    purpose: "解析 ELF/PE/APK/PDF/WAV/JPEG/PNG 的关键结构和元数据线索。",
+  },
+];
+
 const CATEGORY_RULES = {
   crypto: ["rsa", "aes", "xor", "cipher", "nonce", "modulus", "prime", "decrypt", "encrypt", "base64", "hex"],
   web: ["http", "https", "cookie", "session", "jwt", "request", "route", "upload", "template", "csrf", "xss", "sql", "login"],
@@ -638,6 +677,29 @@ function detectEmbeddedPayloads(buffer, offset = 128) {
   return hits
     .sort((left, right) => left.offset - right.offset)
     .filter((item, index, array) => index === 0 || item.offset !== array[index - 1].offset || item.id !== array[index - 1].id);
+}
+
+function scanEmbeddedSignatures(buffer, offset = 0, limit = 80) {
+  const hits = [];
+  for (const signature of EMBEDDED_SIGNATURES) {
+    let cursor = offset;
+    while (cursor < buffer.length && hits.length < limit) {
+      const index = markerAfterOffset(buffer, signature.magic, cursor);
+      if (index === -1) {
+        break;
+      }
+      hits.push({
+        ...signature,
+        offset: index,
+      });
+      cursor = index + Math.max(1, signature.magic.length);
+    }
+  }
+
+  return hits
+    .sort((left, right) => left.offset - right.offset || left.id.localeCompare(right.id))
+    .filter((item, index, array) => index === 0 || item.offset !== array[index - 1].offset || item.id !== array[index - 1].id)
+    .slice(0, limit);
 }
 
 function normalizeText(value) {
@@ -4163,6 +4225,11 @@ async function buildArtifactSignals(filePath) {
     artifact.keywords.push("http", "url");
   }
 
+  artifact.actions.push({
+    id: "run-builtin-toolbox",
+    label: "内置工具箱扫描",
+  });
+
   attachToolBackedActions(artifact);
 
   if (artifact.flagCandidates.length) {
@@ -4373,6 +4440,103 @@ function collectRelevantMissingTools(artifacts) {
     ...item,
     actions: dedupeStrings(item.actions).slice(0, 4),
   }));
+}
+
+function getBundledToolStatus() {
+  return BUNDLED_TOOL_CAPABILITIES.map((tool) => ({
+    ...tool,
+    available: true,
+    source: "bundled",
+  }));
+}
+
+function buildFailureGuide(error, action, artifact) {
+  const actionId = String(action?.id || "");
+  const message = error?.message || String(error || "");
+  const guide = {
+    title: "检查输入和依赖",
+    reason: message,
+    steps: [
+      "确认附件没有损坏，并重新运行一次自动求解。",
+      "如果题目给过密码、key、hint 或 flag 格式，把它们补充到题面/备注后重跑。",
+    ],
+    fallback: "保留原始附件，先查看内置工具箱报告和 strings 输出，再决定是否手动介入。",
+  };
+
+  if (actionId === "extract-archive") {
+    guide.title = "压缩包未能自动解包";
+    guide.steps = [
+      "确认压缩包是否加密；如果题目给过密码，把密码写入备注后重新分析。",
+      "检查是否是 RAR/7Z/TAR 等当前内置解包不支持的格式；这类文件建议安装 7-Zip 或 binwalk 后重跑。",
+      "如果是嵌套压缩包，先确认第一层是否成功提取，再从生成文件继续分析。",
+    ];
+    guide.fallback = "内置解包覆盖 ZIP/GZIP；复杂压缩格式建议用 7-Zip、binwalk 或手动指定密码处理。";
+  } else if (actionId === "decode-encoded-text") {
+    guide.title = "文本没有可直接还原的编码层";
+    guide.steps = [
+      "检查文本是否需要密钥、移位量、字典或题目 hint，而不是纯 Base64/Hex/ROT/XOR。",
+      "尝试把可疑片段单独放进文本附件再运行，减少噪声。",
+      "如果像古典密码或多层弱加密，安装 Ciphey 后重跑可获得更深的自动尝试。",
+    ];
+    guide.fallback = "内置 ciphey-lite 已覆盖常见编码和单字节 XOR；未知密钥类密码仍需要题目线索。";
+  } else if (actionId === "extract-png-lsb") {
+    guide.title = "PNG 低位平面未命中";
+    guide.steps = [
+      "确认图片是否被二次压缩或转换；优先使用题目原始 PNG。",
+      "检查是否需要特定通道、位序、坐标顺序或密码；这些通常来自题目标题/描述/hint。",
+      "安装 zsteg 后重跑，用完整 LSB 组合暴力扫描补充内置 zsteg-lite。",
+    ];
+    guide.fallback = "内置 zsteg-lite 只跑常见 RGB/RGBA 低位可读文本，深度隐写仍建议 zsteg/stegsolve。";
+  } else if (actionId === "extract-png-text") {
+    guide.title = "PNG 文本块为空";
+    guide.steps = [
+      "这通常表示没有 tEXt/zTXt/iTXt 文本块，不代表图片没有隐藏信息。",
+      "继续查看内置工具箱报告中的低位平面、尾部附加数据和 strings 结果。",
+      "如果题目提示 metadata/comment，确认是否拿到了原始 PNG，而不是平台预览图或截图。",
+    ];
+    guide.fallback = "PNG 文本块只是隐写入口之一；没有文本块时应转向 LSB、调色板、像素通道或附加文件。";
+  } else if (actionId === "extract-image-qr" || actionId === "extract-image-barcode") {
+    guide.title = "图码识别失败";
+    guide.steps = [
+      "尝试裁剪、旋转、提高对比度或恢复原图分辨率后重新导入。",
+      "如果图码被遮挡或需要先做通道分离，先运行/查看图像通道导出结果。",
+      "检查图片尾部是否有附加数据，真正的 flag 可能不在可见图码中。",
+    ];
+    guide.fallback = "内置识别适合清晰 QR/条码；严重变形图码需要人工预处理。";
+  } else if (actionId === "extract-traffic-sessions" || actionId.startsWith("tool:tshark")) {
+    guide.title = "流量解析不完整";
+    guide.steps = [
+      "确认文件是 pcap/pcapng，且没有被截断或二次压缩。",
+      "优先查看 HTTP、DNS、TLS SNI、Cookie/Token；若内置摘要为空，安装 Wireshark/TShark 后重跑。",
+      "如果题目是分片/非标准协议，需要按端口或 TCP stream 手动还原。",
+    ];
+    guide.fallback = "内置 tshark-lite 只覆盖常见 HTTP/DNS/TLS 线索，深度协议分析建议 TShark/Wireshark。";
+  } else if (actionId.startsWith("tool:")) {
+    const tool = action?.tool || actionId.split(":")[1] || "外部工具";
+    guide.title = `${tool} 未能执行`;
+    guide.steps = [
+      "确认工具已经安装并加入 PATH，然后重新打开应用或重新运行分析。",
+      "如果工具对 Windows 支持不稳定，优先使用 WSL/Kali 中的同名工具处理该附件。",
+      "查看内置工具箱报告；大多数基础 strings、签名扫描、编码解码和 PNG LSB 已有内置替代。",
+    ];
+    guide.fallback = "外部工具只是增强项，缺失时应用会继续使用内置轻量适配器。";
+  } else if (actionId === "run-builtin-toolbox") {
+    guide.title = "内置工具箱扫描失败";
+    guide.steps = [
+      "确认文件可读取且未被其他程序锁定。",
+      "如果文件非常大，先截取题目相关附件或按目录分批导入。",
+      "保留原文件，手动运行对应外部工具验证是否存在损坏或格式异常。",
+    ];
+    guide.fallback = "内置工具箱不会修改原文件，失败通常与文件读取、格式异常或超大附件有关。";
+  }
+
+  return {
+    ...guide,
+    actionId,
+    actionLabel: action?.label || actionId,
+    sourceName: artifact?.name || "",
+    sourcePath: artifact?.path || "",
+  };
 }
 
 function buildSolverResult(artifacts, flagCandidates, pipelineLog, pipelineErrors, toolStatus) {
@@ -4757,6 +4921,174 @@ function exportStrings(filePath, outputRoot) {
   const outPath = writeGeneratedFile(outputRoot, generatedName, `${sections.join("\n")}\n`);
   return {
     message: "\u5df2\u5bfc\u51fa ASCII / UTF-16 strings \u7ed3\u679c\u3002",
+    createdFiles: [outPath],
+  };
+}
+
+function formatOffset(offset) {
+  return `0x${Number(offset || 0).toString(16).padStart(8, "0")}`;
+}
+
+function appendReportSection(lines, title, entries, emptyText) {
+  lines.push(`## ${title}`);
+  if (!entries.length) {
+    lines.push(emptyText || "(none)", "");
+    return;
+  }
+  entries.forEach((entry) => lines.push(entry));
+  lines.push("");
+}
+
+function buildBuiltinToolboxReport(filePath) {
+  const stat = fs.statSync(filePath);
+  const maxBytes = Math.min(stat.size, Math.max(MAX_TRAFFIC_BYTES, MAX_ARCHIVE_TOTAL_BYTES));
+  const buffer = readSample(filePath, maxBytes).buffer;
+  const descriptor = detectFamily(filePath, buffer);
+  const fileName = path.basename(filePath);
+  const text = descriptor.family === "text" || descriptor.family === "document" ? decodeBufferAsText(buffer) : extractAsciiStrings(buffer, 4, 5000).join("\n");
+  const lines = [
+    "# BUILTIN TOOLBOX REPORT",
+    `file: ${fileName}`,
+    `size: ${formatBytes(stat.size)}`,
+    `family: ${COPY.families[descriptor.family] || descriptor.family}`,
+    `badge: ${descriptor.badge}`,
+    `scanBytes: ${formatBytes(buffer.length)}`,
+    "",
+    "本报告由打包内置能力生成，不依赖外部 PATH 工具。",
+    "",
+  ];
+
+  appendReportSection(
+    lines,
+    "bundled adapters",
+    BUNDLED_TOOL_CAPABILITIES.map((tool) => `- ${tool.label}: ${tool.replaces} | ${tool.purpose}`),
+  );
+
+  const signatureHits = scanEmbeddedSignatures(buffer, 0, 60).map((item) => {
+    const note = item.offset > 0 ? "embedded/appended candidate" : "file header";
+    return `- ${formatOffset(item.offset)} ${item.label}${item.ext} (${note})`;
+  });
+  appendReportSection(lines, "binwalk-lite signature scan", signatureHits, "未发现可识别的嵌入文件头。");
+
+  const asciiStrings = extractAsciiStrings(buffer, 5, 500);
+  const unicodeStrings = extractUnicodeStrings(buffer, 5, 200);
+  const suspiciousStrings = dedupeStrings(
+    asciiStrings
+      .concat(unicodeStrings)
+      .filter((value) => /flag|ctf|key|secret|password|token|cookie|http|zip|base64|xor|admin|login/i.test(value))
+      .slice(0, 80),
+  );
+  appendReportSection(lines, "strings-lite suspicious strings", suspiciousStrings.map((item) => `- ${item}`), "未发现明显可疑字符串。");
+
+  const directFlags = findFlagCandidates(text, `${fileName} (built-in strings)`);
+  appendReportSection(lines, "flag candidates", directFlags.map((item) => `- ${item.value} (${item.source})`), "未直接命中 flag 样式。");
+
+  const decoded = smartDecodeTextContent(Buffer.from(text, "utf8"));
+  appendReportSection(
+    lines,
+    "ciphey-lite decode attempts",
+    decoded.slice(0, 12).map((item) => `- ${item.label}: ${String(item.value).slice(0, 500)}`),
+    "未发现可直接自动还原的编码层。",
+  );
+
+  if (descriptor.badge === "PNG") {
+    const pngText = extractPngTextChunks(buffer);
+    appendReportSection(lines, "zsteg-lite PNG text chunks", pngText.map((item) => `- ${item}`), "未发现 PNG 文本块。");
+    const lsb = collectPngLSBCandidates(buffer);
+    const lsbLines = lsb.slice(0, 12).flatMap((item) => {
+      const header = `- ${item.traversal.toUpperCase()} ${item.channel} bit${item.bitPlane} ${item.bitOrder.toUpperCase()}`;
+      return [header, ...item.printable.slice(0, 4).map((entry) => `  ${entry}`), ...item.flags.map((entry) => `  ${entry.value}`)];
+    });
+    appendReportSection(lines, "zsteg-lite PNG LSB", lsbLines, "未发现常见低位平面可读文本。");
+  }
+
+  if (descriptor.family === "network") {
+    try {
+      const traffic = analyzeTrafficBuffer(buffer);
+      const trafficLines = [
+        `- frames: ${traffic.frameCount}`,
+        `- http requests: ${traffic.httpRequests.length}`,
+        `- dns queries: ${traffic.dnsQueries.length}`,
+        `- tls sni: ${traffic.tlsServerNames.length}`,
+        ...traffic.httpRequests.slice(0, 12).map((item) => `- HTTP ${item.method || ""} ${item.host || ""}${item.uri || ""}`.trim()),
+        ...traffic.dnsQueries.slice(0, 12).map((item) => `- DNS ${item.name || ""} ${item.answer || ""}`.trim()),
+      ];
+      appendReportSection(lines, "tshark-lite traffic summary", trafficLines, "未解析到流量摘要。");
+    } catch (error) {
+      appendReportSection(lines, "tshark-lite traffic summary", [`- parse failed: ${error.message}`]);
+    }
+  }
+
+  if (descriptor.badge === "PDF") {
+    const report = analyzePdfBuffer(buffer);
+    appendReportSection(
+      lines,
+      "exif-lite PDF",
+      [
+        `- metadata: ${report.metadata.length}`,
+        `- urls: ${report.urls.length}`,
+        `- xmp packets: ${report.xmpPackets.length}`,
+        `- readable streams: ${report.extractedStreams.length}`,
+        ...report.metadata.slice(0, 20).map((item) => `- ${item}`),
+        ...report.urls.slice(0, 12).map((item) => `- ${item}`),
+      ],
+    );
+  }
+
+  if (descriptor.badge === "JPEG") {
+    const segments = parseJpegSegments(buffer);
+    appendReportSection(
+      lines,
+      "exif-lite JPEG",
+      [
+        `- segments: ${segments.length}`,
+        `- comments: ${segments.filter((item) => item.kind === "comment").length}`,
+        `- xmp: ${segments.filter((item) => item.kind === "xmp").length}`,
+        ...extractJpegComments(buffer).slice(0, 20).map((item) => `- ${item}`),
+      ],
+    );
+  }
+
+  const elfReport = descriptor.badge === "ELF" ? parseElfBinary(buffer) : null;
+  if (elfReport) {
+    const elfSymbols = dedupeStrings(elfReport.symbolTables.flatMap((table) => [...table.functions, ...table.globals, ...table.objects])).slice(0, 80);
+    appendReportSection(
+      lines,
+      "rabin2-lite ELF",
+      [
+        `- machine: ${elfReport.machine}`,
+        `- entry: ${formatHex(elfReport.entry)}`,
+        `- sections: ${elfReport.sections.length}`,
+        `- symbols: ${elfSymbols.length}`,
+        ...elfReport.neededLibraries.map((item) => `- needed: ${item}`),
+        ...elfSymbols.slice(0, 40).map((item) => `- symbol: ${item}`),
+      ],
+    );
+  }
+
+  const peReport = descriptor.badge === "PE" ? parsePeBinary(buffer) : null;
+  if (peReport) {
+    appendReportSection(
+      lines,
+      "rabin2-lite PE",
+      [
+        `- machine: ${peReport.machine}`,
+        `- subsystem: ${peReport.subsystem}`,
+        `- sections: ${peReport.sections.length}`,
+        `- imports: ${peReport.importedFunctions.length}`,
+        ...peReport.importedFunctions.slice(0, 40).map((item) => `- import: ${item}`),
+      ],
+    );
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+function runBuiltinToolbox(filePath, outputRoot) {
+  const report = buildBuiltinToolboxReport(filePath);
+  const outPath = writeGeneratedFile(outputRoot, `${sanitizeSegment(path.parse(filePath).name)}-builtin-toolbox.txt`, report);
+  return {
+    message: "已运行内置工具箱：strings-lite、binwalk-lite、ciphey-lite、zsteg/tshark/rabin2/exif 子集。",
     createdFiles: [outPath],
   };
 }
@@ -5429,6 +5761,9 @@ async function runArtifactActionInternal(actionId, filePath, outputRoot) {
     return runToolAction(actionId, filePath, baseDir);
   }
 
+  if (actionId === "run-builtin-toolbox") {
+    return runBuiltinToolbox(filePath, baseDir);
+  }
   if (actionId === "extract-appended-zip" || actionId === "extract-appended-payloads") {
     return actionId === "extract-appended-zip" ? extractAppendedZip(filePath, baseDir) : extractAppendedPayloads(filePath, baseDir);
   }
@@ -5490,6 +5825,9 @@ async function runArtifactActionInternal(actionId, filePath, outputRoot) {
 function shouldAutoRun(actionId, artifact) {
   if (String(actionId || "").startsWith("tool:")) {
     return artifact.depth === 0 && isToolActionAutoRunnable(actionId);
+  }
+  if (actionId === "run-builtin-toolbox") {
+    return artifact.depth === 0;
   }
   if (actionId === "extract-appended-zip" || actionId === "extract-appended-payloads") {
     return true;
@@ -5612,6 +5950,7 @@ async function buildPipelineArtifacts(rootPaths, outputRoot) {
           sourcePath: artifact.path,
           sourceName: artifact.name,
           message: error?.message || String(error),
+          guide: buildFailureGuide(error, action, artifact),
         });
       }
     }
@@ -5654,6 +5993,7 @@ async function analyzeChallenge(payload, outputRoot) {
   const classification = classifyChallenge({ title, description, notes, tags }, pipeline.artifacts);
   const quickFindings = buildQuickFindings(pipeline.artifacts, allFlagCandidates, pipeline.pipelineLog);
   const toolStatus = getToolStatusSummary();
+  const bundledTools = getBundledToolStatus();
   const solver = buildSolverResult(pipeline.artifacts, allFlagCandidates, pipeline.pipelineLog, pipeline.pipelineErrors, toolStatus);
   const warnings = [];
 
@@ -5678,6 +6018,7 @@ async function analyzeChallenge(payload, outputRoot) {
     flagCandidates: allFlagCandidates,
     warnings,
     toolStatus,
+    bundledTools,
     emptyFlagMessage: COPY.app.noFlags,
   };
 }

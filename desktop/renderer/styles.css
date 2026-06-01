@@ -541,6 +541,31 @@ body.is-busy .status-banner::after {
   gap: 16px;
 }
 
+.result-map {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.result-map span {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  box-shadow: var(--shadow-sm);
+}
+
+body[data-theme="dark"] .result-map span {
+  background: rgba(255, 255, 255, 0.04);
+}
+
 .action-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-bottom: 16px;
@@ -1200,6 +1225,145 @@ body[data-theme="dark"] .workbench-subpanel {
 
 .pipeline-panel {
   min-height: 238px;
+}
+
+.pipeline-details,
+.failure-details {
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: var(--surface-soft);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.pipeline-details + .pipeline-details,
+.failure-details + .failure-details {
+  margin-top: 10px;
+}
+
+.pipeline-details summary,
+.failure-details summary {
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.pipeline-details summary::-webkit-details-marker,
+.failure-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.pipeline-details summary::after,
+.failure-details summary::after {
+  content: "+";
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid var(--line);
+  color: var(--accent-strong);
+}
+
+body[data-theme="dark"] .pipeline-details summary::after,
+body[data-theme="dark"] .failure-details summary::after {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.pipeline-details[open] summary::after,
+.failure-details[open] summary::after {
+  content: "-";
+}
+
+.pipeline-details summary span,
+.failure-details summary span {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.pipeline-details summary strong,
+.failure-details summary strong {
+  font-family: var(--heading-font);
+  font-size: 15px;
+  letter-spacing: -0.02em;
+}
+
+.pipeline-details summary small,
+.failure-details summary small {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pipeline-details summary em {
+  min-width: 34px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-style: normal;
+  font-size: 12px;
+}
+
+.pipeline-body,
+.failure-body {
+  display: grid;
+  gap: 12px;
+  padding: 0 14px 14px;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.pipeline-body p,
+.failure-body p,
+.failure-body small {
+  margin: 0;
+}
+
+.pipeline-created {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.failure-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.failure-heading strong {
+  font-family: var(--heading-font);
+  font-size: 16px;
+}
+
+.failure-details {
+  border-color: rgba(211, 75, 75, 0.16);
+}
+
+.failure-details summary::after {
+  color: var(--danger);
+}
+
+.failure-body ol {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.failure-body li + li {
+  margin-top: 8px;
 }
 
 .score-pill {

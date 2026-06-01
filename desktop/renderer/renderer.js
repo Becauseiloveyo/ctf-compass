@@ -45,6 +45,11 @@ const STRINGS = {
   solverArtifactMeta: "扫描文件",
   solverMissingTools: "建议安装",
   solverFailedActions: "失败动作",
+  bundledToolTitle: "内置自动能力",
+  bundledToolNote: "这些能力已随应用打包，分析时自动调用，不需要额外安装。",
+  failureGuideTitle: "失败任务指南",
+  failureEmpty: "没有失败的自动任务。",
+  pipelineCreatedLabel: "生成文件",
   workbenchKicker: "\u4e13\u9898\u9762\u677f",
   workbenchTitle: "\u6309\u9644\u4ef6\u65cf\u7fa4\u62c6\u5f00\u7684\u5de5\u4f5c\u53f0",
   pipelineKicker: "\u81ea\u52a8\u5904\u7406",
@@ -218,6 +223,7 @@ const elements = {
   workbenchTabs: document.getElementById("workbench-tabs"),
   workbenchPanel: document.getElementById("workbench-panel"),
   pipelineList: document.getElementById("pipeline-list"),
+  failureList: document.getElementById("failure-list"),
   flagList: document.getElementById("flag-list"),
   nextList: document.getElementById("next-list"),
   findingList: document.getElementById("finding-list"),
@@ -927,6 +933,104 @@ function renderSolverCard(solver) {
   elements.solverCard.append(card);
 }
 
+function createPipelineDetails(entry, index) {
+  const details = document.createElement("details");
+  details.className = "pipeline-details";
+  if (index === 0) {
+    details.open = true;
+  }
+
+  const createdArtifacts = entry.createdArtifacts || [];
+  const summary = document.createElement("summary");
+  summary.innerHTML = `<span><strong>${escapeHtml(entry.actionLabel)}</strong><small>${escapeHtml(entry.sourceName || "")}</small></span><em>${createdArtifacts.length}</em>`;
+  details.append(summary);
+
+  const body = document.createElement("div");
+  body.className = "pipeline-body";
+  const message = document.createElement("p");
+  message.textContent = entry.message || "";
+  body.append(message);
+
+  if (createdArtifacts.length) {
+    const created = document.createElement("div");
+    created.className = "pipeline-created";
+    created.append(createToolChip(`${STRINGS.pipelineCreatedLabel} ${createdArtifacts.length}`));
+    createdArtifacts.slice(0, 12).forEach((artifact) => {
+      created.append(createToolChip(artifact.name || artifact.path || "artifact"));
+    });
+    body.append(created);
+  }
+
+  details.append(body);
+  return details;
+}
+
+function createFailureGuideDetails(entry, index) {
+  const guide = entry.guide || {};
+  const details = document.createElement("details");
+  details.className = "failure-details";
+  if (index === 0) {
+    details.open = true;
+  }
+
+  const summary = document.createElement("summary");
+  summary.innerHTML = `<span><strong>${escapeHtml(guide.title || entry.actionLabel || STRINGS.failureGuideTitle)}</strong><small>${escapeHtml(
+    entry.sourceName || guide.sourceName || "",
+  )}</small></span>`;
+  details.append(summary);
+
+  const body = document.createElement("div");
+  body.className = "failure-body";
+
+  const reason = document.createElement("p");
+  reason.textContent = guide.reason || entry.message || "";
+  body.append(reason);
+
+  const steps = document.createElement("ol");
+  (guide.steps || []).slice(0, 5).forEach((step) => {
+    const item = document.createElement("li");
+    item.textContent = step;
+    steps.append(item);
+  });
+  if (steps.children.length) {
+    body.append(steps);
+  }
+
+  if (guide.fallback) {
+    const fallback = document.createElement("small");
+    fallback.textContent = guide.fallback;
+    body.append(fallback);
+  }
+
+  details.append(body);
+  return details;
+}
+
+function renderFailurePanel(result) {
+  if (!elements.failureList) {
+    return;
+  }
+
+  elements.failureList.innerHTML = "";
+  const heading = document.createElement("div");
+  heading.className = "failure-heading";
+  heading.innerHTML = `<strong>${STRINGS.failureGuideTitle}</strong>`;
+  elements.failureList.append(heading);
+
+  const errors = result?.pipelineErrors || [];
+  if (!errors.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-copy";
+    empty.textContent = STRINGS.failureEmpty;
+    elements.failureList.append(empty);
+    return;
+  }
+
+  errors.slice(0, 12).forEach((entry, index) => {
+    elements.failureList.append(createFailureGuideDetails(entry, index));
+  });
+}
+
 function createEvidenceSummary(filePath) {
   const evidence = getEvidenceEntry(filePath);
   if (!evidence.note && !evidence.pinned && evidence.status === "todo") {
@@ -1036,6 +1140,7 @@ function renderResults() {
     elements.workbenchTabs.innerHTML = "";
     elements.workbenchPanel.innerHTML = `<p class="empty-copy">${STRINGS.workbenchNoArtifacts}</p>`;
     elements.pipelineList.innerHTML = `<p class="empty-copy">${STRINGS.emptyPipeline}</p>`;
+    renderFailurePanel(null);
     elements.flagList.innerHTML = `<p class="empty-copy">${STRINGS.emptyFlags}</p>`;
     elements.nextList.innerHTML = "";
     elements.findingList.innerHTML = `<p class="empty-copy">${STRINGS.emptyArtifactDetail}</p>`;
@@ -1066,16 +1171,11 @@ function renderResults() {
     emptyPipeline.textContent = STRINGS.emptyPipeline;
     elements.pipelineList.append(emptyPipeline);
   } else {
-    result.pipelineLog.forEach((entry) => {
-      const row = document.createElement("div");
-      row.className = "stack-item";
-      const createdNames = (entry.createdArtifacts || []).map((artifact) => artifact.name).join("  |  ");
-      row.innerHTML = `<strong>${escapeHtml(entry.sourceName)} \u2192 ${escapeHtml(entry.actionLabel)}</strong><p>${escapeHtml(
-        entry.message,
-      )}</p><small>${escapeHtml(createdNames)}</small>`;
-      elements.pipelineList.append(row);
+    result.pipelineLog.forEach((entry, index) => {
+      elements.pipelineList.append(createPipelineDetails(entry, index));
     });
   }
+  renderFailurePanel(result);
 
   elements.flagList.innerHTML = "";
   if (state.casebook.finalFlag) {
@@ -1154,6 +1254,25 @@ function createToolStatusCard(title, items, className, emptyText) {
 
 function renderToolPanel(result) {
   elements.toolList.innerHTML = "";
+
+  if (result.bundledTools?.length) {
+    const bundled = document.createElement("section");
+    bundled.className = "tool-suggested bundled-tools";
+    const title = document.createElement("strong");
+    title.textContent = STRINGS.bundledToolTitle;
+    const note = document.createElement("p");
+    note.className = "empty-copy";
+    note.textContent = STRINGS.bundledToolNote;
+    const row = document.createElement("div");
+    row.className = "classification-tool-row";
+    result.bundledTools.forEach((tool) => {
+      const chip = createToolChip(tool.label, "installed");
+      chip.title = `${tool.replaces}: ${tool.purpose}`;
+      row.append(chip);
+    });
+    bundled.append(title, note, row);
+    elements.toolList.append(bundled);
+  }
 
   const suggested = document.createElement("section");
   suggested.className = "tool-suggested";
