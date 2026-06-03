@@ -15,7 +15,7 @@ const MAX_SAMPLE_BYTES = 1024 * 1024;
 const MAX_TEXT_BYTES = 512 * 1024;
 const MAX_ARCHIVE_ENTRIES = 80;
 const MAX_ARCHIVE_TOTAL_BYTES = 32 * 1024 * 1024;
-const MAX_PIPELINE_DEPTH = 3;
+const MAX_PIPELINE_DEPTH = 5;
 const MAX_TRAFFIC_BYTES = 24 * 1024 * 1024;
 const MAX_TRAFFIC_FRAMES = 12000;
 const MAX_HTTP_OBJECTS = 24;
@@ -102,6 +102,16 @@ const MORSE_DECODE_MAP = {
   "..--.-": "_",
   ".--.-.": "@",
 };
+
+const F5_DEZIGZAG = [
+  0, 1, 5, 6, 14, 15, 27, 28, 2, 4, 7, 13, 16, 26, 29, 42,
+  3, 8, 12, 17, 25, 30, 41, 43, 9, 11, 18, 24, 31, 40, 44, 53,
+  10, 19, 23, 32, 39, 45, 52, 54, 20, 22, 33, 38, 46, 51, 55, 60,
+  21, 34, 37, 47, 50, 56, 59, 61, 35, 36, 48, 49, 57, 58, 62, 63,
+];
+
+const F5_PASSWORD_CANDIDATES = ["abc123", "", "ctf", "flag", "misc", "stego"];
+const MAX_F5_PAYLOAD_BYTES = 8 * 1024 * 1024;
 
 const EMBEDDED_SIGNATURES = [
   { id: "zip", label: "ZIP", ext: ".zip", magic: Buffer.from([0x50, 0x4b, 0x03, 0x04]) },
@@ -213,6 +223,12 @@ const BUNDLED_TOOL_CAPABILITIES = [
     purpose: "扫描 PNG 文本块与常见 RGB/RGBA 低位平面可读文本候选。",
   },
   {
+    id: "f5-jpeg-lite",
+    label: "内置 F5-JPEG",
+    replaces: "F5 Extract",
+    purpose: "从 baseline JPEG DCT 系数中尝试 F5 隐写提取，默认覆盖 CTF 常见密码 abc123。",
+  },
+  {
     id: "tshark-lite",
     label: "内置 tshark-lite",
     replaces: "TShark basic",
@@ -275,10 +291,7 @@ function attachToolBackedActions(artifact) {
     artifact.highlights.push(`可直接调用外部工具：${runnableLabels.join(" / ")}。`);
   }
 
-  const missingLabels = dedupeStrings(toolActions.filter((item) => !item.available).map((item) => item.toolLabel));
-  if (missingLabels.length) {
-    artifact.suggestions.push(`安装后可增强自动化：${missingLabels.join(" / ")}。`);
-  }
+  // Missing external tools are optional enhancements; keep install prompts out of the main result flow.
 }
 
 function sanitizeSegment(value) {
@@ -4260,6 +4273,10 @@ async function buildArtifactSignals(filePath) {
         id: "extract-jpeg-segments",
         label: "\u63d0\u53d6 JPEG \u6bb5",
       });
+      artifact.actions.push({
+        id: "extract-jpeg-f5",
+        label: "内置 F5-JPEG 提取",
+      });
       const jpegSegments = parseJpegSegments(buffer);
       if (jpegSegments.length) {
         artifact.highlights.push(`JPEG \u6bb5 ${jpegSegments.length} \u4e2a\u3002`);
@@ -4286,7 +4303,7 @@ async function buildArtifactSignals(filePath) {
         // ignore
       }
     }
-    artifact.suggestions.push("\u67e5 EXIF/XMP/COM/APP \u6bb5\u3001\u901a\u9053\u9690\u5199\u3001LSB \u548c\u5c3e\u90e8\u9644\u52a0\u6587\u4ef6\u3002");
+    artifact.suggestions.push("查 EXIF/XMP/COM/APP 段、通道隐写、LSB、F5/Jsteg 类 DCT 隐写和尾部附加文件。");
   } else if (artifact.family === "audio") {
     artifact.summary = "\u97f3\u9891\u7c7b\u9644\u4ef6\uff0c\u9002\u5408\u68c0\u67e5 RIFF \u5757\u3001\u5143\u6570\u636e\u3001strings\u3001PCM LSB \u548c\u53ef\u89c6\u5316\u8f68\u8ff9\u3002";
     artifact.keywords.push("audio");
@@ -4924,7 +4941,7 @@ function buildSolverResult(artifacts, flagCandidates, pipelineLog, pipelineError
     }))
     .sort((left, right) => right.score - left.score);
   const primaryFlag = rankedCandidates[0] || null;
-  const missingTools = collectRelevantMissingTools(artifacts);
+  const missingTools = [];
   const failedActions = (pipelineErrors || []).slice(0, 5);
   const installedToolCount = (toolStatus?.installed || []).length;
   const nextActions = [];
@@ -5122,6 +5139,48 @@ function extractZipEntries(zip, outputRoot) {
   return createdFiles;
 }
 
+function repairPseudoEncryptedZip(buffer) {
+  if (detectMagic(buffer) !== "zip") {
+    return null;
+  }
+
+  const repaired = Buffer.from(buffer);
+  let changed = false;
+  let offset = 0;
+
+  while (offset + 4 <= repaired.length) {
+    const signature = repaired.readUInt32LE(offset);
+    if (signature === 0x04034b50 && offset + 30 <= repaired.length) {
+      const flags = repaired.readUInt16LE(offset + 6);
+      if (flags & 0x0001) {
+        repaired.writeUInt16LE(flags & ~0x0001, offset + 6);
+        changed = true;
+      }
+      const nameLength = repaired.readUInt16LE(offset + 26);
+      const extraLength = repaired.readUInt16LE(offset + 28);
+      offset += Math.max(4, 30 + nameLength + extraLength);
+      continue;
+    }
+
+    if (signature === 0x02014b50 && offset + 46 <= repaired.length) {
+      const flags = repaired.readUInt16LE(offset + 8);
+      if (flags & 0x0001) {
+        repaired.writeUInt16LE(flags & ~0x0001, offset + 8);
+        changed = true;
+      }
+      const nameLength = repaired.readUInt16LE(offset + 28);
+      const extraLength = repaired.readUInt16LE(offset + 30);
+      const commentLength = repaired.readUInt16LE(offset + 32);
+      offset += Math.max(4, 46 + nameLength + extraLength + commentLength);
+      continue;
+    }
+
+    offset += 1;
+  }
+
+  return changed ? repaired : null;
+}
+
 function extractArchive(filePath, outputRoot) {
   const sample = readSample(filePath, 16).buffer;
   if (detectMagic(sample) === "gzip" || path.extname(filePath).toLowerCase() === ".gz") {
@@ -5139,14 +5198,32 @@ function extractArchive(filePath, outputRoot) {
     };
   }
 
-  const zip = new AdmZip(filePath);
-  const createdFiles = extractZipEntries(zip, outputRoot);
+  const zipBuffer = fs.readFileSync(filePath);
+  let zip = new AdmZip(zipBuffer);
+  let createdFiles = [];
+  let usedPseudoEncryptedRepair = false;
+
+  try {
+    createdFiles = extractZipEntries(zip, outputRoot);
+  } catch (error) {
+    const repaired = repairPseudoEncryptedZip(zipBuffer);
+    if (!repaired) {
+      throw error;
+    }
+    writeGeneratedFile(outputRoot, `${sanitizeSegment(path.parse(filePath).name)}-zip-flags-repaired.zip`, repaired);
+    zip = new AdmZip(repaired);
+    createdFiles = extractZipEntries(zip, outputRoot);
+    usedPseudoEncryptedRepair = true;
+  }
+
   if (!createdFiles.length) {
     throw new Error("\u538b\u7f29\u5305\u4e2d\u6ca1\u6709\u53ef\u63d0\u53d6\u7684\u6587\u4ef6\u3002");
   }
 
   return {
-    message: "\u5df2\u89e3\u5305 ZIP \u5e76\u5c06\u5185\u5bb9\u7eb3\u5165\u7ee7\u7eed\u5206\u6790\u3002",
+    message: usedPseudoEncryptedRepair
+      ? "已修复 ZIP 伪加密标志并解包，内容已继续纳入递归分析。"
+      : "\u5df2\u89e3\u5305 ZIP \u5e76\u5c06\u5185\u5bb9\u7eb3\u5165\u7ee7\u7eed\u5206\u6790\u3002",
     createdFiles,
   };
 }
@@ -5804,6 +5881,495 @@ function extractDocumentPackage(filePath, outputRoot) {
   return extractArchive(filePath, outputRoot);
 }
 
+class JpegEntropyBitReader {
+  constructor(buffer) {
+    this.buffer = buffer;
+    this.position = 0;
+  }
+
+  readBit() {
+    if (this.position >= this.buffer.length * 8) {
+      throw new Error("JPEG 熵编码数据提前结束。");
+    }
+    const bit = (this.buffer[this.position >> 3] >> (7 - (this.position & 7))) & 1;
+    this.position += 1;
+    return bit;
+  }
+
+  readBits(count) {
+    let value = 0;
+    for (let index = 0; index < count; index += 1) {
+      value = (value << 1) | this.readBit();
+    }
+    return value;
+  }
+}
+
+function jpegReceiveExtend(value, bitCount) {
+  if (!bitCount) {
+    return 0;
+  }
+  const threshold = 1 << (bitCount - 1);
+  return value < threshold ? value + ((-1 << bitCount) + 1) : value;
+}
+
+function buildJpegHuffmanTable(counts, values) {
+  const table = [];
+  let code = 0;
+  let valueIndex = 0;
+  for (let bits = 1; bits <= 16; bits += 1) {
+    const count = counts[bits - 1] || 0;
+    for (let index = 0; index < count; index += 1) {
+      table.push({
+        code,
+        bits,
+        value: values[valueIndex],
+      });
+      code += 1;
+      valueIndex += 1;
+    }
+    code <<= 1;
+  }
+  return table;
+}
+
+function readJpegHuffmanValue(reader, table) {
+  let code = 0;
+  for (let bits = 1; bits <= 16; bits += 1) {
+    code = (code << 1) | reader.readBit();
+    const match = table.find((entry) => entry.bits === bits && entry.code === code);
+    if (match) {
+      return match.value;
+    }
+  }
+  throw new Error("JPEG Huffman 表无法解码当前位流。");
+}
+
+function collectJpegEntropyBytes(buffer, offset) {
+  const bytes = [];
+  let cursor = offset;
+  while (cursor < buffer.length) {
+    if (buffer[cursor] === 0xff) {
+      const marker = buffer[cursor + 1];
+      if (marker === 0x00) {
+        bytes.push(0xff);
+        cursor += 2;
+        continue;
+      }
+      if (marker >= 0xd0 && marker <= 0xd7) {
+        cursor += 2;
+        continue;
+      }
+      if (marker === 0xd9) {
+        break;
+      }
+    }
+    bytes.push(buffer[cursor]);
+    cursor += 1;
+  }
+  return Buffer.from(bytes);
+}
+
+function parseJpegF5Coefficients(buffer) {
+  if (detectMagic(buffer) !== "jpeg") {
+    throw new Error("F5 只支持 JPEG 文件。");
+  }
+
+  const huffmanTables = { dc: {}, ac: {} };
+  const componentsById = {};
+  let scanComponents = null;
+  let entropyBytes = null;
+  let mcuCount = 0;
+  let offset = 2;
+
+  while (offset + 4 <= buffer.length) {
+    if (buffer[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    while (offset < buffer.length && buffer[offset] === 0xff) {
+      offset += 1;
+    }
+    if (offset >= buffer.length) {
+      break;
+    }
+
+    const marker = buffer[offset];
+    offset += 1;
+    if (marker === 0xd9) {
+      break;
+    }
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      continue;
+    }
+    if (offset + 2 > buffer.length) {
+      break;
+    }
+
+    const length = buffer.readUInt16BE(offset);
+    if (length < 2 || offset + length > buffer.length) {
+      throw new Error("JPEG 段长度异常。");
+    }
+    const data = buffer.subarray(offset + 2, offset + length);
+    offset += length;
+
+    if (marker === 0xc4) {
+      let cursor = 0;
+      while (cursor < data.length) {
+        const tableInfo = data[cursor];
+        cursor += 1;
+        const tableClass = tableInfo >> 4;
+        const tableId = tableInfo & 0x0f;
+        const counts = Array.from(data.subarray(cursor, cursor + 16));
+        cursor += 16;
+        const valueCount = counts.reduce((sum, count) => sum + count, 0);
+        const values = Array.from(data.subarray(cursor, cursor + valueCount));
+        cursor += valueCount;
+        huffmanTables[tableClass ? "ac" : "dc"][tableId] = buildJpegHuffmanTable(counts, values);
+      }
+    } else if (marker === 0xc0) {
+      let cursor = 0;
+      cursor += 1; // sample precision
+      const height = data.readUInt16BE(cursor);
+      cursor += 2;
+      const width = data.readUInt16BE(cursor);
+      cursor += 2;
+      const componentCount = data[cursor];
+      cursor += 1;
+      let maxHorizontal = 0;
+      let maxVertical = 0;
+      for (let index = 0; index < componentCount; index += 1) {
+        const id = data[cursor];
+        const sampling = data[cursor + 1];
+        cursor += 3;
+        const horizontal = sampling >> 4;
+        const vertical = sampling & 0x0f;
+        componentsById[id] = {
+          id,
+          horizontal,
+          vertical,
+          previousDc: 0,
+        };
+        maxHorizontal = Math.max(maxHorizontal, horizontal);
+        maxVertical = Math.max(maxVertical, vertical);
+      }
+      mcuCount = Math.ceil(width / (8 * maxHorizontal)) * Math.ceil(height / (8 * maxVertical));
+    } else if (marker === 0xda) {
+      let cursor = 0;
+      const componentCount = data[cursor];
+      cursor += 1;
+      scanComponents = [];
+      for (let index = 0; index < componentCount; index += 1) {
+        const id = data[cursor];
+        const tableSelector = data[cursor + 1];
+        cursor += 2;
+        scanComponents.push({
+          ...componentsById[id],
+          dcTableId: tableSelector >> 4,
+          acTableId: tableSelector & 0x0f,
+        });
+      }
+      entropyBytes = collectJpegEntropyBytes(buffer, offset);
+      break;
+    } else if (marker >= 0xc1 && marker <= 0xcf && marker !== 0xc4) {
+      throw new Error("当前内置 F5 仅支持 baseline JPEG，不支持渐进式/算术编码 JPEG。");
+    }
+  }
+
+  if (!scanComponents || !entropyBytes || !mcuCount) {
+    throw new Error("没有解析到可用于 F5 的 JPEG 扫描数据。");
+  }
+
+  const reader = new JpegEntropyBitReader(entropyBytes);
+  const coefficients = [];
+  for (let mcu = 0; mcu < mcuCount; mcu += 1) {
+    for (const component of scanComponents) {
+      for (let vertical = 0; vertical < component.vertical; vertical += 1) {
+        for (let horizontal = 0; horizontal < component.horizontal; horizontal += 1) {
+          const block = new Array(64).fill(0);
+          const dcTable = huffmanTables.dc[component.dcTableId];
+          const acTable = huffmanTables.ac[component.acTableId];
+          if (!dcTable || !acTable) {
+            throw new Error("JPEG Huffman 表不完整，无法提取 F5 系数。");
+          }
+
+          const dcBits = readJpegHuffmanValue(reader, dcTable);
+          component.previousDc += jpegReceiveExtend(reader.readBits(dcBits), dcBits);
+          block[0] = component.previousDc;
+
+          let zigzagIndex = 1;
+          while (zigzagIndex < 64) {
+            const symbol = readJpegHuffmanValue(reader, acTable);
+            if (symbol === 0x00) {
+              break;
+            }
+            if (symbol === 0xf0) {
+              zigzagIndex += 16;
+              continue;
+            }
+            const run = symbol >> 4;
+            const bitCount = symbol & 0x0f;
+            zigzagIndex += run;
+            if (zigzagIndex >= 64) {
+              break;
+            }
+            block[zigzagIndex] = jpegReceiveExtend(reader.readBits(bitCount), bitCount);
+            zigzagIndex += 1;
+          }
+
+          coefficients.push(...block);
+        }
+      }
+    }
+  }
+
+  return coefficients;
+}
+
+function javaSignedByte(value) {
+  const byte = value & 0xff;
+  return byte > 127 ? byte - 256 : byte;
+}
+
+function createF5Random(password) {
+  let state = crypto.createHash("sha1").update(Buffer.from(String(password || ""), "utf8")).digest();
+  const cache = [];
+
+  function updateState(output) {
+    let carry = 1;
+    let changed = false;
+    for (let index = 0; index < state.length; index += 1) {
+      const value = javaSignedByte(state[index]) + javaSignedByte(output[index]) + carry;
+      const next = value & 0xff;
+      if (state[index] !== next) {
+        changed = true;
+      }
+      state[index] = next;
+      carry = value >> 8;
+    }
+    if (!changed) {
+      state[0] = (state[0] + 1) & 0xff;
+    }
+  }
+
+  return {
+    nextByte() {
+      if (!cache.length) {
+        const output = crypto.createHash("sha1").update(state).digest();
+        updateState(output);
+        cache.push(...output);
+      }
+      return javaSignedByte(cache.shift());
+    },
+    nextValue(maxValue) {
+      let value = this.nextByte() | (this.nextByte() << 8) | (this.nextByte() << 16) | (this.nextByte() << 24);
+      value %= maxValue;
+      if (value < 0) {
+        value += maxValue;
+      }
+      return value;
+    },
+  };
+}
+
+function buildF5Permutation(size, random) {
+  const shuffled = Array.from({ length: size }, (_value, index) => index);
+  let maxRandom = size;
+  for (let index = 0; index < size; index += 1) {
+    const randomIndex = random.nextValue(maxRandom);
+    maxRandom -= 1;
+    const temporary = shuffled[randomIndex];
+    shuffled[randomIndex] = shuffled[maxRandom];
+    shuffled[maxRandom] = temporary;
+  }
+  return shuffled;
+}
+
+function mapF5CoefficientIndex(index) {
+  return index - (index % 64) + F5_DEZIGZAG[index % 64];
+}
+
+function readF5Bit(coefficient) {
+  return coefficient > 0 ? coefficient & 1 : 1 - (coefficient & 1);
+}
+
+function extractF5Payload(coefficients, password) {
+  const random = createF5Random(password);
+  const permutation = buildF5Permutation(coefficients.length, random);
+  let coefficientIndex = 0;
+  let availableBits = 0;
+  let encodedLength = 0;
+
+  for (; availableBits < 32 && coefficientIndex < coefficients.length; coefficientIndex += 1) {
+    let shuffledIndex = permutation[coefficientIndex];
+    if (shuffledIndex % 64 === 0) {
+      continue;
+    }
+    shuffledIndex = mapF5CoefficientIndex(shuffledIndex);
+    const coefficient = coefficients[shuffledIndex];
+    if (coefficient === 0) {
+      continue;
+    }
+    encodedLength |= readF5Bit(coefficient) << availableBits;
+    availableBits += 1;
+  }
+
+  encodedLength ^= random.nextByte();
+  encodedLength ^= random.nextByte() << 8;
+  encodedLength ^= random.nextByte() << 16;
+  encodedLength ^= random.nextByte() << 24;
+
+  const k = (encodedLength >> 24) % 32;
+  const n = (1 << k) - 1;
+  const fileLength = encodedLength & 0x007fffff;
+  if (k < 0 || k > 7 || fileLength <= 0 || fileLength > MAX_F5_PAYLOAD_BYTES) {
+    return null;
+  }
+
+  const output = [];
+  let extractedByte = 0;
+  availableBits = 0;
+
+  if (n > 0) {
+    let startOfN = coefficientIndex;
+    while (output.length < fileLength && startOfN < coefficients.length) {
+      let hash = 0;
+      let code = 1;
+      let consumed = 0;
+      for (; code <= n && startOfN + consumed < coefficients.length; consumed += 1) {
+        let shuffledIndex = permutation[startOfN + consumed];
+        if (shuffledIndex % 64 === 0) {
+          continue;
+        }
+        shuffledIndex = mapF5CoefficientIndex(shuffledIndex);
+        const coefficient = coefficients[shuffledIndex];
+        if (coefficient === 0) {
+          continue;
+        }
+        if (readF5Bit(coefficient) === 1) {
+          hash ^= code;
+        }
+        code += 1;
+      }
+      startOfN += consumed;
+      if (code <= n) {
+        break;
+      }
+
+      for (let bitIndex = 0; bitIndex < k && output.length < fileLength; bitIndex += 1) {
+        extractedByte |= ((hash >> bitIndex) & 1) << availableBits;
+        availableBits += 1;
+        if (availableBits === 8) {
+          output.push((extractedByte ^ random.nextByte()) & 0xff);
+          extractedByte = 0;
+          availableBits = 0;
+        }
+      }
+    }
+  } else {
+    for (; coefficientIndex < coefficients.length && output.length < fileLength; coefficientIndex += 1) {
+      let shuffledIndex = permutation[coefficientIndex];
+      if (shuffledIndex % 64 === 0) {
+        continue;
+      }
+      shuffledIndex = mapF5CoefficientIndex(shuffledIndex);
+      const coefficient = coefficients[shuffledIndex];
+      if (coefficient === 0) {
+        continue;
+      }
+      extractedByte |= readF5Bit(coefficient) << availableBits;
+      availableBits += 1;
+      if (availableBits === 8) {
+        output.push((extractedByte ^ random.nextByte()) & 0xff);
+        extractedByte = 0;
+        availableBits = 0;
+      }
+    }
+  }
+
+  if (output.length !== fileLength) {
+    return null;
+  }
+
+  return {
+    password,
+    k,
+    n,
+    fileLength,
+    payload: Buffer.from(output),
+  };
+}
+
+function inferPayloadExtension(buffer) {
+  const magic = detectMagic(buffer);
+  if (magic === "jpeg") return ".jpg";
+  if (magic === "png") return ".png";
+  if (magic === "gif") return ".gif";
+  if (magic === "zip") return ".zip";
+  if (magic === "gzip") return ".gz";
+  if (magic === "pdf") return ".pdf";
+  if (magic === "elf") return ".elf";
+  if (magic === "pe") return ".exe";
+  if (scorePrintableRatio(buffer.subarray(0, Math.min(buffer.length, 4096))) > 0.84) return ".txt";
+  return ".bin";
+}
+
+function scoreF5Payload(buffer) {
+  if (!buffer || !buffer.length) {
+    return 0;
+  }
+  const magic = detectMagic(buffer);
+  let score = magic ? 20 : 0;
+  if (findFlagCandidates(decodeBufferAsText(buffer), "F5 payload").length) {
+    score += 40;
+  }
+  score += scorePrintableRatio(buffer.subarray(0, Math.min(buffer.length, 4096))) * 10;
+  if (scanEmbeddedSignatures(buffer, 0, 6).length) {
+    score += 8;
+  }
+  return score;
+}
+
+function collectJpegF5Candidates(buffer) {
+  const coefficients = parseJpegF5Coefficients(buffer);
+  return F5_PASSWORD_CANDIDATES.map((password) => extractF5Payload(coefficients, password))
+    .filter(Boolean)
+    .map((candidate) => ({
+      ...candidate,
+      score: scoreF5Payload(candidate.payload),
+    }))
+    .filter((candidate) => candidate.score >= 18)
+    .sort((left, right) => right.score - left.score);
+}
+
+function extractJpegF5(filePath, outputRoot) {
+  const buffer = fs.readFileSync(filePath);
+  const candidates = collectJpegF5Candidates(buffer);
+  if (!candidates.length) {
+    throw new Error("没有通过内置 F5-JPEG 提取到可信载荷；如题目给了密码，请把密码写进备注后再分析。");
+  }
+
+  ensureOutputRoot(outputRoot);
+  const baseName = sanitizeSegment(path.parse(filePath).name);
+  const createdFiles = [];
+  const lines = ["# F5-JPEG", `file: ${path.basename(filePath)}`, ""];
+  candidates.slice(0, 4).forEach((candidate, index) => {
+    const extension = inferPayloadExtension(candidate.payload);
+    const passwordLabel = candidate.password ? candidate.password : "empty";
+    const outPath = writeGeneratedFile(outputRoot, `${baseName}-f5-${index + 1}-${sanitizeSegment(passwordLabel)}${extension}`, candidate.payload);
+    createdFiles.push(outPath);
+    lines.push(
+      `- password=${JSON.stringify(candidate.password)} k=${candidate.k} n=${candidate.n} size=${formatBytes(candidate.fileLength)} output=${path.basename(outPath)}`,
+    );
+  });
+  createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-f5-report.txt`, `${lines.join("\n")}\n`));
+
+  return {
+    message: `已运行内置 F5-JPEG，提取 ${candidates.length} 个可信载荷。`,
+    createdFiles,
+  };
+}
+
 function extractJpegComments(buffer) {
   if (detectMagic(buffer) !== "jpeg" || buffer.length < 4) {
     return [];
@@ -6132,6 +6698,9 @@ async function runArtifactActionInternal(actionId, filePath, outputRoot) {
   if (actionId === "extract-jpeg-segments") {
     return extractJpegSegments(filePath, baseDir);
   }
+  if (actionId === "extract-jpeg-f5") {
+    return extractJpegF5(filePath, baseDir);
+  }
   if (actionId === "extract-image-qr") {
     return extractImageQr(filePath, baseDir);
   }
@@ -6197,6 +6766,9 @@ function shouldAutoRun(actionId, artifact) {
   if (actionId === "extract-jpeg-segments") {
     return artifact.badge === "JPEG" && artifact.depth === 0;
   }
+  if (actionId === "extract-jpeg-f5") {
+    return artifact.badge === "JPEG" && artifact.depth < MAX_PIPELINE_DEPTH;
+  }
   if (actionId === "extract-image-qr") {
     return artifact.family === "image" && artifact.depth === 0;
   }
@@ -6225,7 +6797,7 @@ function shouldAutoRun(actionId, artifact) {
     return artifact.family === "document" && isOfficePackageExtension(artifact.extension) && artifact.depth < MAX_PIPELINE_DEPTH;
   }
   if (actionId === "decode-encoded-text") {
-    return artifact.depth < MAX_PIPELINE_DEPTH;
+    return artifact.depth < MAX_PIPELINE_DEPTH && !(artifact.flagCandidates || []).length;
   }
   if (actionId === "extract-traffic-sessions") {
     return artifact.family === "network" && artifact.depth === 0;
