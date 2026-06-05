@@ -161,7 +161,8 @@ const VIEW_COPY = {
 const state = {
   activeView: "workspace",
   workbenchFamily: "binary",
-  theme: localStorage.getItem("ctf-theme") || "dark",
+  theme: localStorage.getItem("ctf-theme") || "light",
+  sidebarCollapsed: true,
   isBusy: false,
   artifacts: [],
   analysis: null,
@@ -176,9 +177,11 @@ const WORKSPACE_VERSION = 1;
 const EVIDENCE_STATUSES = ["todo", "checking", "confirmed"];
 let persistenceReady = false;
 let saveTimer = null;
+let sidebarHoverTimer = null;
 
 const elements = {
   body: document.body,
+  sidebar: document.querySelector(".sidebar"),
   navItems: Array.from(document.querySelectorAll(".nav-item")),
   views: {
     workspace: document.getElementById("workspace-view"),
@@ -188,6 +191,7 @@ const elements = {
   },
   viewKicker: document.getElementById("view-kicker"),
   viewTitle: document.getElementById("view-title"),
+  sidebarToggle: document.getElementById("sidebar-toggle"),
   appMeta: document.getElementById("app-meta"),
   settingsRuntime: document.getElementById("settings-runtime"),
   themeToggle: document.getElementById("theme-toggle"),
@@ -206,14 +210,19 @@ const elements = {
   pickFilesButton: document.getElementById("pick-files-button"),
   pickFolderButton: document.getElementById("pick-folder-button"),
   runAnalysisButton: document.getElementById("run-analysis-button"),
+  workspaceRunAnalysisButton: document.getElementById("workspace-run-analysis-button"),
   quickFilesButton: document.getElementById("quick-files-button"),
   quickFolderButton: document.getElementById("quick-folder-button"),
   quickPasteButton: document.getElementById("quick-paste-button"),
   quickRunButton: document.getElementById("quick-run-button"),
   artifactDropzone: document.getElementById("artifact-dropzone"),
   artifactCountPill: document.getElementById("artifact-count-pill"),
+  workspaceClueCount: document.getElementById("workspace-clue-count"),
+  workspaceFlagCount: document.getElementById("workspace-flag-count"),
   artifactPreviewList: document.getElementById("artifact-preview-list"),
   discoveryList: document.getElementById("discovery-list"),
+  workspaceFlagList: document.getElementById("workspace-flag-list"),
+  workspaceNextList: document.getElementById("workspace-next-list"),
   artifactDetailList: document.getElementById("artifact-detail-list"),
   summaryCategory: document.getElementById("summary-category"),
   summaryConfidence: document.getElementById("summary-confidence"),
@@ -388,6 +397,9 @@ function setStatus(message, kind = "info") {
 }
 
 function setButtonDisabled(button, disabled, title = "") {
+  if (!button) {
+    return;
+  }
   button.disabled = disabled;
   button.classList.toggle("is-disabled", disabled);
   button.title = title;
@@ -397,6 +409,7 @@ function updateActionAvailability() {
   const canAnalyze = workspaceHasAnalyzableInput() && !state.isBusy;
   const analyzeTitle = canAnalyze ? "" : STRINGS.runDisabledHint;
   setButtonDisabled(elements.runAnalysisButton, !canAnalyze, analyzeTitle);
+  setButtonDisabled(elements.workspaceRunAnalysisButton, !canAnalyze, analyzeTitle);
   setButtonDisabled(elements.quickRunButton, !canAnalyze, analyzeTitle);
 
   const canExport = Boolean(state.analysis) && !state.isBusy;
@@ -410,7 +423,7 @@ function updateActionAvailability() {
     elements.quickFolderButton,
     elements.artifactDropzone,
     elements.clearSandboxButton,
-  ].forEach((button) => {
+  ].filter(Boolean).forEach((button) => {
     setButtonDisabled(button, state.isBusy);
   });
   elements.body.classList.toggle("is-busy", state.isBusy);
@@ -475,6 +488,54 @@ function setTheme(theme) {
 
 function toggleTheme() {
   setTheme(state.theme === "light" ? "dark" : "light");
+}
+
+function setSidebarCollapsed(collapsed) {
+  state.sidebarCollapsed = collapsed;
+  elements.body.classList.toggle("sidebar-collapsed", collapsed);
+  if (elements.sidebarToggle) {
+    elements.sidebarToggle.setAttribute("aria-expanded", String(!collapsed));
+    elements.sidebarToggle.setAttribute("aria-label", collapsed ? "展开侧边栏" : "折叠侧边栏");
+    elements.sidebarToggle.title = collapsed ? "展开侧边栏" : "折叠侧边栏";
+  }
+}
+
+function toggleSidebar() {
+  setSidebarCollapsed(!state.sidebarCollapsed);
+}
+
+function bindSidebarHover() {
+  if (!elements.sidebar) {
+    return;
+  }
+
+  function scheduleSidebarState(collapsed, delay) {
+    window.clearTimeout(sidebarHoverTimer);
+    sidebarHoverTimer = window.setTimeout(() => {
+      setSidebarCollapsed(collapsed);
+    }, delay);
+  }
+
+  elements.sidebar.addEventListener("pointerenter", () => {
+    scheduleSidebarState(false, 70);
+  });
+
+  elements.sidebar.addEventListener("pointerleave", () => {
+    scheduleSidebarState(true, 140);
+  });
+
+  elements.sidebar.addEventListener("focusin", () => {
+    window.clearTimeout(sidebarHoverTimer);
+    setSidebarCollapsed(false);
+  });
+
+  elements.sidebar.addEventListener("focusout", () => {
+    window.setTimeout(() => {
+      if (!elements.sidebar.contains(document.activeElement)) {
+        setSidebarCollapsed(true);
+      }
+    }, 0);
+  });
 }
 
 function uniqArtifacts(items) {
@@ -581,6 +642,50 @@ function renderDiscoveryPanel() {
     box.textContent = item;
     elements.discoveryList.append(box);
   });
+}
+
+function renderWorkspaceStatus() {
+  const quickFindings = state.analysis
+    ? state.analysis.quickFindings.concat(state.analysis.warnings || [])
+    : inferPreviewFindings();
+  const flagCandidates = state.analysis?.flagCandidates || [];
+  const nextSteps = state.analysis?.solver?.nextActions?.length
+    ? state.analysis.solver.nextActions
+    : state.analysis?.classification?.nextMoves || [];
+
+  if (elements.workspaceClueCount) {
+    elements.workspaceClueCount.textContent = String(quickFindings.length);
+  }
+  if (elements.workspaceFlagCount) {
+    elements.workspaceFlagCount.textContent = String(flagCandidates.length);
+  }
+
+  if (elements.workspaceFlagList) {
+    elements.workspaceFlagList.innerHTML = "";
+    if (!flagCandidates.length) {
+      const empty = document.createElement("p");
+      empty.className = "empty-copy";
+      empty.textContent = STRINGS.emptyFlags;
+      elements.workspaceFlagList.append(empty);
+    } else {
+      flagCandidates.slice(0, 4).forEach((candidate) => {
+        const item = document.createElement("div");
+        item.className = "stack-item flag-item compact-flag-item";
+        item.innerHTML = `<strong>${escapeHtml(candidate.value)}</strong><p>${escapeHtml(candidate.source || "")}</p>`;
+        elements.workspaceFlagList.append(item);
+      });
+    }
+  }
+
+  if (elements.workspaceNextList) {
+    elements.workspaceNextList.innerHTML = "";
+    const items = nextSteps.length ? nextSteps.slice(0, 4) : [STRINGS.runDisabledHint];
+    items.forEach((step) => {
+      const item = document.createElement("li");
+      item.textContent = step;
+      elements.workspaceNextList.append(item);
+    });
+  }
 }
 
 function sortArtifactsForDisplay(items) {
@@ -1466,6 +1571,7 @@ function renderAll() {
   renderViewHeader();
   renderArtifactPreview();
   renderDiscoveryPanel();
+  renderWorkspaceStatus();
   renderResults();
   renderArtifactDetails();
   updateActionAvailability();
@@ -1765,30 +1871,39 @@ async function hydrateMeta() {
   await refreshSandboxInfo();
 }
 
+function bindClick(element, handler) {
+  if (element) {
+    element.addEventListener("click", handler);
+  }
+}
+
 elements.navItems.forEach((button) => {
   button.addEventListener("click", () => {
     switchView(button.dataset.view);
   });
 });
 
-elements.themeToggle.addEventListener("click", toggleTheme);
-elements.settingsThemeToggle.addEventListener("click", toggleTheme);
-elements.exportReportButton.addEventListener("click", exportReport);
-elements.settingsExportReportButton.addEventListener("click", exportReport);
-elements.clearWorkspaceButton.addEventListener("click", clearWorkspace);
-elements.openSandboxButton.addEventListener("click", openSandboxFolder);
-elements.clearSandboxButton.addEventListener("click", clearSandboxData);
-elements.pickFilesButton.addEventListener("click", () => appendPreparedArtifacts(window.ctfCompass.pickFiles()));
-elements.pickFolderButton.addEventListener("click", () => appendPreparedArtifacts(window.ctfCompass.pickFolder()));
-elements.quickFilesButton.addEventListener("click", () => appendPreparedArtifacts(window.ctfCompass.pickFiles()));
-elements.quickFolderButton.addEventListener("click", () => appendPreparedArtifacts(window.ctfCompass.pickFolder()));
-elements.quickPasteButton.addEventListener("click", () => {
+bindClick(elements.sidebarToggle, toggleSidebar);
+bindSidebarHover();
+bindClick(elements.themeToggle, toggleTheme);
+bindClick(elements.settingsThemeToggle, toggleTheme);
+bindClick(elements.exportReportButton, exportReport);
+bindClick(elements.settingsExportReportButton, exportReport);
+bindClick(elements.clearWorkspaceButton, clearWorkspace);
+bindClick(elements.openSandboxButton, openSandboxFolder);
+bindClick(elements.clearSandboxButton, clearSandboxData);
+bindClick(elements.pickFilesButton, () => appendPreparedArtifacts(window.ctfCompass.pickFiles()));
+bindClick(elements.pickFolderButton, () => appendPreparedArtifacts(window.ctfCompass.pickFolder()));
+bindClick(elements.quickFilesButton, () => appendPreparedArtifacts(window.ctfCompass.pickFiles()));
+bindClick(elements.quickFolderButton, () => appendPreparedArtifacts(window.ctfCompass.pickFolder()));
+bindClick(elements.quickPasteButton, () => {
   elements.descriptionInput.focus();
   setStatus(STRINGS.statusFocusDescription);
 });
-elements.runAnalysisButton.addEventListener("click", runAnalysis);
-elements.quickRunButton.addEventListener("click", runAnalysis);
-elements.artifactDropzone.addEventListener("click", () => appendPreparedArtifacts(window.ctfCompass.pickFiles()));
+bindClick(elements.runAnalysisButton, runAnalysis);
+bindClick(elements.workspaceRunAnalysisButton, runAnalysis);
+bindClick(elements.quickRunButton, runAnalysis);
+bindClick(elements.artifactDropzone, () => appendPreparedArtifacts(window.ctfCompass.pickFiles()));
 
 [elements.titleInput, elements.tagsInput, elements.descriptionInput, elements.notesInput, elements.caseSummaryInput].forEach((input) => {
   input.addEventListener("input", () => {
@@ -1819,6 +1934,7 @@ elements.artifactDropzone.addEventListener("drop", (event) => {
 });
 
 setTheme(state.theme);
+setSidebarCollapsed(state.sidebarCollapsed);
 applyStaticCopy();
 renderAll();
 setStatus(STRINGS.statusReady);

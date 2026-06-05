@@ -3,13 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: file:; connect-src 'self' http://127.0.0.1:* http://localhost:*"
+    />
     <title>CTF Compass</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
-  <body data-theme="dark">
+  <body class="sidebar-collapsed" data-theme="light">
     <div class="shell">
       <aside class="sidebar">
         <div class="sidebar-top">
+          <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-label="展开侧边栏" aria-expanded="false">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M5 7h14M5 12h14M5 17h14" />
+            </svg>
+          </button>
+
           <div class="brand">
             <div class="brand-mark" aria-hidden="true">
               <svg viewBox="0 0 64 64" fill="none">
@@ -23,6 +33,7 @@
               <p class="brand-caption" data-copy="brandCaption"></p>
               <h1>CTF Compass</h1>
             </div>
+            <span class="sidebar-state-dot" aria-hidden="true"></span>
           </div>
 
           <nav class="nav">
@@ -105,125 +116,125 @@
         <div id="status-banner" class="status-banner is-hidden"></div>
 
         <section id="workspace-view" class="view is-active">
-          <div class="action-grid">
-            <button id="quick-files-button" class="action-card action-card-file" type="button">
-              <span class="action-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none">
-                  <path d="M8 4h6l4 4v11a1 1 0 0 1-1 1H8a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" />
-                  <path d="M14 4v4h4M9 13h6M12 10v6" />
-                </svg>
-              </span>
-              <span class="action-copy">
-                <strong data-copy="quickFilesTitle"></strong>
-                <small data-copy="quickFilesNote"></small>
-              </span>
-              <span class="action-arrow" aria-hidden="true">01</span>
-            </button>
-            <button id="quick-folder-button" class="action-card action-card-folder" type="button">
-              <span class="action-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none">
-                  <path d="M4 8a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v7a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3z" />
-                </svg>
-              </span>
-              <span class="action-copy">
-                <strong data-copy="quickFolderTitle"></strong>
-                <small data-copy="quickFolderNote"></small>
-              </span>
-              <span class="action-arrow" aria-hidden="true">02</span>
-            </button>
-            <button id="quick-paste-button" class="action-card action-card-text" type="button">
-              <span class="action-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none">
-                  <path d="M8 5h8M7 8h10M7 12h10M7 16h6" />
-                  <path d="M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" />
-                </svg>
-              </span>
-              <span class="action-copy">
-                <strong data-copy="quickPasteTitle"></strong>
-                <small data-copy="quickPasteNote"></small>
-              </span>
-              <span class="action-arrow" aria-hidden="true">03</span>
-            </button>
-            <button id="quick-run-button" class="action-card accent-card" type="button">
-              <span class="action-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none">
-                  <path d="M8 6l10 6-10 6z" />
-                  <path d="M5 5v14" />
-                </svg>
-              </span>
-              <span class="action-copy">
-                <strong data-copy="quickRunTitle"></strong>
-                <small data-copy="quickRunNote"></small>
-              </span>
-              <span class="action-arrow" aria-hidden="true">04</span>
-            </button>
-          </div>
-
-          <div class="dashboard-grid">
-            <section class="panel panel-compose">
-              <div class="panel-head">
-                <div>
-                  <p class="panel-kicker" data-copy="workspacePanelKicker"></p>
-                  <h3 class="panel-title" data-copy="workspacePanelTitle"></h3>
-                </div>
-                <span class="pill" data-copy="workspacePanelBadge"></span>
-              </div>
-
-              <div class="form-grid">
-                <label class="field">
-                  <span data-copy="fieldTitle"></span>
-                  <input id="title-input" type="text" />
-                </label>
-
-                <label class="field">
-                  <span data-copy="fieldTags"></span>
-                  <input id="tags-input" type="text" />
-                </label>
-
-                <label class="field field-full">
-                  <span data-copy="fieldDescription"></span>
-                  <textarea id="description-input" rows="6"></textarea>
-                </label>
-
-                <label class="field field-full">
-                  <span data-copy="fieldNotes"></span>
-                  <textarea id="notes-input" rows="5"></textarea>
-                </label>
-              </div>
-            </section>
-
-            <section class="panel panel-artifacts">
-              <div class="panel-head">
+          <div class="workspace-layout">
+            <section class="panel workspace-primary-panel">
+              <div class="workspace-hero-row">
                 <div>
                   <p class="panel-kicker" data-copy="artifactPanelKicker"></p>
-                  <h3 class="panel-title" data-copy="artifactPanelTitle"></h3>
-                </div>
-                <span class="pill" id="artifact-count-pill">0</span>
-              </div>
-
-              <button id="artifact-dropzone" class="dropzone" type="button">
-                <span class="dropzone-icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none">
-                    <path d="M12 5v10M7.5 9.5L12 5l4.5 4.5" />
-                    <path d="M5 16.5a2.5 2.5 0 0 0 2.5 2.5h9a2.5 2.5 0 0 0 0-5 4.5 4.5 0 0 0-8.66-1.7A3.5 3.5 0 0 0 5 16.5z" />
-                  </svg>
-                </span>
-                <span class="dropzone-title" data-copy="dropzoneTitle"></span>
-                <span class="dropzone-note" data-copy="dropzoneNote"></span>
-              </button>
-
-              <div id="artifact-preview-list" class="artifact-preview-list"></div>
-            </section>
-
-            <section class="panel panel-insight">
-              <div class="panel-head">
-                <div>
-                  <p class="panel-kicker" data-copy="discoveryKicker"></p>
-                  <h3 class="panel-title" data-copy="discoveryTitle"></h3>
+                  <h3 class="panel-title">添加附件开始分析</h3>
+                  <p class="body-copy">把题目给的图片、压缩包、文本、流量包或二进制文件放进来，应用会自动递归提取和寻找 flag。</p>
                 </div>
               </div>
-              <div id="discovery-list" class="stack-list"></div>
+
+              <div class="attachment-section">
+                <div class="section-label-row">
+                  <div>
+                    <h3 class="section-title" data-copy="artifactPanelTitle"></h3>
+                  </div>
+                </div>
+
+                <button id="artifact-dropzone" class="dropzone" type="button">
+                  <span class="dropzone-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none">
+                      <path d="M12 5v10M7.5 9.5L12 5l4.5 4.5" />
+                      <path d="M5 16.5a2.5 2.5 0 0 0 2.5 2.5h9a2.5 2.5 0 0 0 0-5 4.5 4.5 0 0 0-8.66-1.7A3.5 3.5 0 0 0 5 16.5z" />
+                    </svg>
+                  </span>
+                  <span class="dropzone-title" data-copy="dropzoneTitle"></span>
+                  <span class="dropzone-note" data-copy="dropzoneNote"></span>
+                </button>
+
+                <div id="artifact-preview-list" class="artifact-preview-list"></div>
+              </div>
+
+              <details class="optional-clues">
+                <summary>
+                  <span>可选：题面与线索</span>
+                  <small>只有题目给了密码、hint、标签或特殊描述时再填写。</small>
+                </summary>
+
+                <div class="form-grid compact-form">
+                  <label class="field">
+                    <span data-copy="fieldTitle"></span>
+                    <input id="title-input" type="text" />
+                  </label>
+
+                  <label class="field">
+                    <span data-copy="fieldTags"></span>
+                    <input id="tags-input" type="text" />
+                  </label>
+
+                  <label class="field field-full">
+                    <span data-copy="fieldDescription"></span>
+                    <textarea id="description-input" rows="3"></textarea>
+                  </label>
+
+                  <label class="field field-full">
+                    <span data-copy="fieldNotes"></span>
+                    <textarea id="notes-input" rows="3"></textarea>
+                  </label>
+                </div>
+              </details>
+
+              <div class="workspace-submit-row">
+                <button id="workspace-run-analysis-button" class="primary-button" type="button" data-copy="runAnalysisButton"></button>
+              </div>
             </section>
+
+            <aside class="workspace-status-column" aria-label="工作区状态">
+              <section class="panel compact-panel">
+                <div class="panel-head compact-head">
+                  <div>
+                    <p class="panel-kicker">Status</p>
+                    <h3 class="panel-title">工作区状态</h3>
+                  </div>
+                </div>
+                <div class="stat-grid">
+                  <div class="stat-cell">
+                    <span>附件</span>
+                    <strong id="artifact-count-pill">0</strong>
+                  </div>
+                  <div class="stat-cell">
+                    <span>线索</span>
+                    <strong id="workspace-clue-count">0</strong>
+                  </div>
+                  <div class="stat-cell">
+                    <span>flag</span>
+                    <strong id="workspace-flag-count">0</strong>
+                  </div>
+                </div>
+              </section>
+
+              <section class="panel compact-panel">
+                <div class="panel-head compact-head">
+                  <div>
+                    <p class="panel-kicker" data-copy="discoveryKicker"></p>
+                    <h3 class="panel-title" data-copy="discoveryTitle"></h3>
+                  </div>
+                </div>
+                <div id="discovery-list" class="stack-list compact-stack"></div>
+              </section>
+
+              <section class="panel compact-panel">
+                <div class="panel-head compact-head">
+                  <div>
+                    <p class="panel-kicker" data-copy="flagKicker"></p>
+                    <h3 class="panel-title" data-copy="flagTitle"></h3>
+                  </div>
+                </div>
+                <div id="workspace-flag-list" class="stack-list compact-stack"></div>
+              </section>
+
+              <section class="panel compact-panel">
+                <div class="panel-head compact-head">
+                  <div>
+                    <p class="panel-kicker" data-copy="nextKicker"></p>
+                    <h3 class="panel-title" data-copy="nextTitle"></h3>
+                  </div>
+                </div>
+                <ul id="workspace-next-list" class="plain-list compact-next-list"></ul>
+              </section>
+            </aside>
           </div>
         </section>
 
@@ -413,6 +424,7 @@
       </main>
     </div>
 
-    <script src="./renderer.js"></script>
+    <script type="module" src="./web-polyfill.js"></script>
+    <script type="module" src="./renderer.js"></script>
   </body>
 </html>

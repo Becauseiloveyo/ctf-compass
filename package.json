@@ -6,8 +6,11 @@
   "author": "OpenAI Codex",
   "license": "MIT",
   "scripts": {
-    "dev": "electron .",
+    "dev": "vite",
+    "dev:electron": "electron .",
     "dev:launcher": "electron link-launcher/main.js",
+    "build:web": "vite build",
+    "preview:web": "vite preview --host 0.0.0.0 --port 3000",
     "dist": "electron-builder --win nsis",
     "dist:dir": "electron-builder --win dir",
     "dist:zip": "electron-builder --win zip",
@@ -39,7 +42,8 @@
     "bwip-js": "^4.9.0",
     "electron": "^37.2.0",
     "electron-builder": "^25.1.8",
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "vite": "^8.0.16"
   },
   "dependencies": {
     "@ericblade/quagga2": "^1.12.1",
