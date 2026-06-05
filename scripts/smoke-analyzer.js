@@ -98,6 +98,147 @@ function createPseudoEncryptedZip(zipPath, flag) {
   return zipPath;
 }
 
+function createBrainfuckPrint(text) {
+  let current = 0;
+  let program = "";
+  for (const char of text) {
+    const target = char.charCodeAt(0);
+    const up = (target - current + 256) & 0xff;
+    const down = (current - target + 256) & 0xff;
+    if (up <= down) {
+      program += "+".repeat(up);
+    } else {
+      program += "-".repeat(down);
+    }
+    program += ".";
+    current = target;
+  }
+  return program;
+}
+
+function brainfuckToOok(program) {
+  const map = {
+    ">": "Ook. Ook?",
+    "<": "Ook? Ook.",
+    "+": "Ook. Ook.",
+    "-": "Ook! Ook!",
+    ".": "Ook! Ook.",
+    ",": "Ook. Ook!",
+    "[": "Ook! Ook?",
+    "]": "Ook? Ook!",
+  };
+  return Array.from(program).map((op) => map[op]).filter(Boolean).join(" ");
+}
+
+function affineEncode(text, multiplier, shift) {
+  return String(text || "").replace(/[A-Za-z]/g, (char) => {
+    const code = char.charCodeAt(0);
+    const base = code >= 97 ? 97 : 65;
+    const value = code - base;
+    return String.fromCharCode(((value * multiplier + shift) % 26) + base);
+  });
+}
+
+function railFenceEncode(text, rails) {
+  const rows = Array.from({ length: rails }, () => []);
+  let rail = 0;
+  let direction = 1;
+  for (const char of String(text || "")) {
+    rows[rail].push(char);
+    if (rail === 0) direction = 1;
+    if (rail === rails - 1) direction = -1;
+    rail += direction;
+  }
+  return rows.map((row) => row.join("")).join("");
+}
+
+function base91Encode(text) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&()*+,./:;<=>?@[]^_`{|}~\"";
+  const bytes = Buffer.from(text, "utf8");
+  let accumulator = 0;
+  let bits = 0;
+  let output = "";
+
+  for (const byte of bytes) {
+    accumulator |= byte << bits;
+    bits += 8;
+    if (bits > 13) {
+      let value = accumulator & 8191;
+      if (value > 88) {
+        accumulator >>= 13;
+        bits -= 13;
+      } else {
+        value = accumulator & 16383;
+        accumulator >>= 14;
+        bits -= 14;
+      }
+      output += alphabet[value % 91] + alphabet[Math.floor(value / 91)];
+    }
+  }
+
+  if (bits) {
+    output += alphabet[accumulator % 91];
+    if (bits > 7 || accumulator > 90) {
+      output += alphabet[Math.floor(accumulator / 91)];
+    }
+  }
+
+  return output;
+}
+
+function z85Encode(text) {
+  const alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-:+=^!/*?&<>()[]{}@%$#";
+  const buffer = Buffer.from(text, "utf8");
+  if (buffer.length % 4 !== 0) {
+    throw new Error("Z85 smoke fixture text length must be divisible by 4");
+  }
+
+  let output = "";
+  for (let index = 0; index < buffer.length; index += 4) {
+    let value = buffer.readUInt32BE(index);
+    const encoded = new Array(5);
+    for (let digit = 4; digit >= 0; digit -= 1) {
+      encoded[digit] = alphabet[value % 85];
+      value = Math.floor(value / 85);
+    }
+    output += encoded.join("");
+  }
+  return output;
+}
+
+function dna2BitEncode(text) {
+  const alphabet = ["A", "C", "G", "T"];
+  return Array.from(Buffer.from(text, "utf8"))
+    .map((byte) => byte.toString(2).padStart(8, "0").match(/../g).map((bits) => alphabet[parseInt(bits, 2)]).join(""))
+    .join("");
+}
+
+function a1z26Encode(text) {
+  return String(text || "")
+    .toUpperCase()
+    .split("")
+    .map((char) => (/[A-Z]/.test(char) ? String(char.charCodeAt(0) - 64) : char === "-" ? "/" : ""))
+    .filter(Boolean)
+    .join(" ");
+}
+
+function uuencodeText(text, fileName = "flag.txt") {
+  const bytes = Buffer.from(text, "utf8");
+  const lines = [`begin 644 ${fileName}`];
+  for (let offset = 0; offset < bytes.length; offset += 45) {
+    const chunk = bytes.subarray(offset, offset + 45);
+    let line = String.fromCharCode((chunk.length & 0x3f) + 32);
+    for (let index = 0; index < chunk.length; index += 3) {
+      const block = Buffer.concat([chunk.subarray(index, index + 3), Buffer.alloc(Math.max(0, 3 - (chunk.length - index)))]);
+      const values = [block[0] >> 2, ((block[0] & 0x03) << 4) | (block[1] >> 4), ((block[1] & 0x0f) << 2) | (block[2] >> 6), block[2] & 0x3f];
+      line += values.map((value) => String.fromCharCode((value & 0x3f) + 32)).join("");
+    }
+    lines.push(line);
+  }
+  lines.push("`", "end");
+  return `${lines.join("\n")}\n`;
+}
+
 async function main() {
   const root = path.resolve(__dirname, "..", "tmp", "smoke", String(Date.now()));
   resetDir(root);
@@ -145,6 +286,192 @@ async function main() {
         artifacts: [pseudoZipPath],
       },
       pseudoZipFlag,
+    ),
+  );
+
+  const quotedPrintableFlag = "FLAG-QP-SMOKE";
+  const quotedPrintablePath = writeText(path.join(root, "input", "quoted-printable.txt"), "=46=4C=41=47=2D=51=50=2D=53=4D=4F=4B=45\n");
+  results.push(
+    await runCase(
+      root,
+      "quoted-printable-text",
+      {
+        title: "quoted printable smoke",
+        description: "Quoted-Printable byte escapes should decode locally.",
+        artifacts: [quotedPrintablePath],
+      },
+      quotedPrintableFlag,
+    ),
+  );
+
+  const uuencodeFlag = "FLAG-UUENCODE-SMOKE";
+  const uuencodePath = writeText(path.join(root, "input", "uuencode.txt"), uuencodeText(uuencodeFlag));
+  results.push(
+    await runCase(
+      root,
+      "uuencode-text",
+      {
+        title: "uuencode smoke",
+        description: "UUEncode blocks should decode locally.",
+        artifacts: [uuencodePath],
+      },
+      uuencodeFlag,
+    ),
+  );
+
+  const base91Flag = "FLAG-BASE91-SMOKE";
+  const base91Path = writeText(path.join(root, "input", "base91.txt"), `${base91Encode(base91Flag)}\n`);
+  results.push(
+    await runCase(
+      root,
+      "base91-text",
+      {
+        title: "base91 smoke",
+        description: "Base91 text should decode locally.",
+        artifacts: [base91Path],
+      },
+      base91Flag,
+    ),
+  );
+
+  const z85Flag = "FLAG-Z85-SMOKE12";
+  const z85Path = writeText(path.join(root, "input", "z85.txt"), `${z85Encode(z85Flag)}\n`);
+  results.push(
+    await runCase(
+      root,
+      "z85-text",
+      {
+        title: "z85 smoke",
+        description: "Z85 text should decode locally.",
+        artifacts: [z85Path],
+      },
+      z85Flag,
+    ),
+  );
+
+  const a1z26Flag = "FLAG-AZ-SMOKE";
+  const a1z26Path = writeText(path.join(root, "input", "a1z26.txt"), `${a1z26Encode(a1z26Flag)}\n`);
+  results.push(
+    await runCase(
+      root,
+      "a1z26-text",
+      {
+        title: "a1z26 smoke",
+        description: "A1Z26 number streams should decode locally.",
+        artifacts: [a1z26Path],
+      },
+      a1z26Flag,
+    ),
+  );
+
+  const natoFlag = "FLAG-NATO-SMOKE";
+  const natoPath = writeText(
+    path.join(root, "input", "nato.txt"),
+    "foxtrot lima alpha golf dash november alpha tango oscar dash sierra mike oscar kilo echo\n",
+  );
+  results.push(
+    await runCase(
+      root,
+      "nato-text",
+      {
+        title: "nato phonetic smoke",
+        description: "NATO phonetic words should decode locally.",
+        artifacts: [natoPath],
+      },
+      natoFlag,
+    ),
+  );
+
+  const dnaFlag = "FLAG-DNA-SMOKE";
+  const dnaPath = writeText(path.join(root, "input", "dna.txt"), `${dna2BitEncode(dnaFlag)}\n`);
+  results.push(
+    await runCase(
+      root,
+      "dna-2bit-text",
+      {
+        title: "dna two bit smoke",
+        description: "DNA 2-bit nucleotide streams should decode locally.",
+        artifacts: [dnaPath],
+      },
+      dnaFlag,
+    ),
+  );
+
+  const affineFlag = "FLAG-AFFINE-SMOKE";
+  const affinePath = writeText(path.join(root, "input", "affine.txt"), `${affineEncode(affineFlag, 5, 8)}\n`);
+  results.push(
+    await runCase(
+      root,
+      "affine-text",
+      {
+        title: "affine cipher smoke",
+        description: "Small affine brute force should recover the flag candidate.",
+        artifacts: [affinePath],
+      },
+      affineFlag,
+    ),
+  );
+
+  const railFlag = "FLAG-RAIL-SMOKE";
+  const railPath = writeText(path.join(root, "input", "rail.txt"), `${railFenceEncode(railFlag, 3)}\n`);
+  results.push(
+    await runCase(
+      root,
+      "rail-fence-text",
+      {
+        title: "rail fence smoke",
+        description: "Rail fence brute force should recover the flag candidate.",
+        artifacts: [railPath],
+      },
+      railFlag,
+    ),
+  );
+
+  const morseFlag = "FLAG-MORSE-SMOKE";
+  const morsePath = writeText(
+    path.join(root, "input", "morse.txt"),
+    "..-. .-.. .- --. -....- -- --- .-. ... . -....- ... -- --- -.- .\n",
+  );
+  results.push(
+    await runCase(
+      root,
+      "morse-text",
+      {
+        title: "morse misc smoke",
+        description: "Text Morse should be decoded locally without audio tooling.",
+        artifacts: [morsePath],
+      },
+      morseFlag,
+    ),
+  );
+
+  const polybiusFlag = "FLAG-POLYBIUS-SMOKE";
+  const polybiusPath = writeText(path.join(root, "input", "polybius.txt"), "21 31 11 22 / 35 34 31 54 12 24 45 43 / 43 32 34 25 15\n");
+  results.push(
+    await runCase(
+      root,
+      "polybius-text",
+      {
+        title: "polybius misc smoke",
+        description: "Polybius coordinates should be decoded locally.",
+        artifacts: [polybiusPath],
+      },
+      polybiusFlag,
+    ),
+  );
+
+  const ookFlag = "FLAG-OOK-SMOKE";
+  const ookPath = writeText(path.join(root, "input", "ook.txt"), `${brainfuckToOok(createBrainfuckPrint(ookFlag))}\n`);
+  results.push(
+    await runCase(
+      root,
+      "ook-text",
+      {
+        title: "ook brainfuck dialect smoke",
+        description: "Ook should normalize to Brainfuck and emit a flag candidate.",
+        artifacts: [ookPath],
+      },
+      ookFlag,
     ),
   );
 

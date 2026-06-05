@@ -216,7 +216,7 @@ const BUNDLED_TOOL_CAPABILITIES = [
     id: "ciphey-lite",
     label: "内置 ciphey-lite",
     replaces: "Ciphey",
-    purpose: "自动尝试 Base64/Base58、Hex、Base32、Ascii85、URL、二进制/十进制字节、ROT/Caesar、Bacon、Brainfuck、零宽/空白隐写、单字节 XOR 和压缩文本层。",
+    purpose: "自动尝试 Base64/Base58/Base91、Hex、Base32、Ascii85/Z85、URL、Quoted-Printable、UUEncode、A1Z26、NATO、Morse、Polybius、DNA 2-bit、ROT/Caesar、Affine、Rail Fence、Bacon、Brainfuck/Ook、零宽/空白隐写、单字节 XOR 和压缩文本层。",
   },
   {
     id: "zsteg-lite",
@@ -526,6 +526,69 @@ function base58Decode(value) {
     }
     bytes.unshift(0);
   }
+  return Buffer.from(bytes);
+}
+
+function base91Decode(value) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&()*+,./:;<=>?@[]^_`{|}~\"";
+  const table = new Map(Array.from(alphabet).map((char, index) => [char, index]));
+  const bytes = [];
+  let accumulator = 0;
+  let bits = 0;
+  let value91 = -1;
+
+  for (const char of String(value || "").replace(/\s+/g, "")) {
+    const decoded = table.get(char);
+    if (decoded === undefined) {
+      throw new Error("Invalid base91");
+    }
+    if (value91 === -1) {
+      value91 = decoded;
+      continue;
+    }
+
+    value91 += decoded * 91;
+    accumulator |= value91 << bits;
+    bits += (value91 & 8191) > 88 ? 13 : 14;
+    while (bits > 7) {
+      bytes.push(accumulator & 0xff);
+      accumulator >>= 8;
+      bits -= 8;
+    }
+    value91 = -1;
+  }
+
+  if (value91 !== -1) {
+    bytes.push((accumulator | (value91 << bits)) & 0xff);
+  }
+
+  return Buffer.from(bytes);
+}
+
+function z85Decode(value) {
+  const alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-:+=^!/*?&<>()[]{}@%$#";
+  const table = new Map(Array.from(alphabet).map((char, index) => [char, index]));
+  const cleaned = String(value || "").replace(/\s+/g, "");
+  if (!cleaned || cleaned.length % 5 !== 0) {
+    throw new Error("Invalid z85 length");
+  }
+
+  const bytes = [];
+  for (let index = 0; index < cleaned.length; index += 5) {
+    let value32 = 0;
+    for (const char of cleaned.slice(index, index + 5)) {
+      const decoded = table.get(char);
+      if (decoded === undefined) {
+        throw new Error("Invalid z85");
+      }
+      value32 = value32 * 85 + decoded;
+    }
+    if (value32 > 0xffffffff) {
+      throw new Error("Invalid z85 block");
+    }
+    bytes.push((value32 >>> 24) & 0xff, (value32 >>> 16) & 0xff, (value32 >>> 8) & 0xff, value32 & 0xff);
+  }
+
   return Buffer.from(bytes);
 }
 
@@ -852,6 +915,390 @@ function collectNumericAndEscapeDecodes(text, bucket) {
   });
 }
 
+function collectA1Z26Decodes(text, bucket) {
+  const source = String(text || "");
+  const candidates = dedupeStrings(source.split(/\r?\n/).concat(source).map((line) => line.trim()).filter(Boolean).slice(0, 24));
+  candidates.forEach((line) => {
+    if (line.length > 512) {
+      return;
+    }
+    const usefulChars = (line.match(/(?:2[0-6]|1\d|[1-9]|[\s,;:_\-\/|])/g) || []).join("");
+    if (usefulChars.length / line.length < 0.78) {
+      return;
+    }
+
+    const tokens = line.match(/2[0-6]|1\d|[1-9]|[\/|]/g) || [];
+    const numberCount = tokens.filter((token) => /^\d+$/.test(token)).length;
+    if (numberCount < 4) {
+      return;
+    }
+
+    const decoded = tokens
+      .map((token) => {
+        if (token === "/" || token === "|") {
+          return "-";
+        }
+        return String.fromCharCode(64 + Number(token));
+      })
+      .join("");
+    addDerivedTextResult(bucket, "a1z26", "A1Z26 numbers", decoded, { scoreBoost: 0.7 });
+  });
+}
+
+function collectNatoPhoneticDecodes(text, bucket) {
+  const map = {
+    alpha: "A",
+    alfa: "A",
+    bravo: "B",
+    charlie: "C",
+    delta: "D",
+    echo: "E",
+    foxtrot: "F",
+    golf: "G",
+    hotel: "H",
+    india: "I",
+    juliet: "J",
+    juliett: "J",
+    kilo: "K",
+    lima: "L",
+    mike: "M",
+    november: "N",
+    oscar: "O",
+    papa: "P",
+    quebec: "Q",
+    romeo: "R",
+    sierra: "S",
+    tango: "T",
+    uniform: "U",
+    victor: "V",
+    whiskey: "W",
+    xray: "X",
+    "x-ray": "X",
+    yankee: "Y",
+    zulu: "Z",
+    zero: "0",
+    one: "1",
+    two: "2",
+    three: "3",
+    four: "4",
+    five: "5",
+    six: "6",
+    seven: "7",
+    eight: "8",
+    nine: "9",
+    dash: "-",
+    hyphen: "-",
+    slash: "/",
+    space: " ",
+  };
+  const source = String(text || "");
+  const candidates = dedupeStrings(source.split(/\r?\n/).concat(source).map((line) => line.trim()).filter(Boolean).slice(0, 24));
+  candidates.forEach((line) => {
+    if (line.length > 1200) {
+      return;
+    }
+    const tokens = line.toLowerCase().match(/[a-z]+(?:-[a-z]+)?/g) || [];
+    if (tokens.length < 4) {
+      return;
+    }
+    const decoded = [];
+    let hits = 0;
+    tokens.forEach((token) => {
+      if (map[token]) {
+        decoded.push(map[token]);
+        hits += 1;
+      }
+    });
+    if (hits >= 4 && hits / tokens.length >= 0.72) {
+      addDerivedTextResult(bucket, "nato", "NATO phonetic words", decoded.join(""), { scoreBoost: 0.7 });
+    }
+  });
+}
+
+function collectDna2BitDecodes(text, bucket) {
+  const source = String(text || "");
+  const candidates = dedupeStrings(
+    source
+      .split(/\r?\n/)
+      .concat(source)
+      .map((line) => line.trim().toUpperCase().replace(/U/g, "T"))
+      .filter((line) => line.length >= 16 && line.length <= 2048)
+      .filter((line) => {
+        const dnaChars = (line.match(/[ACGT\s,;:_\-]/g) || []).length;
+        const bases = (line.match(/[ACGT]/g) || []).length;
+        return bases >= 16 && dnaChars / line.length > 0.88;
+      })
+      .slice(0, 8),
+  );
+  const permutations = [
+    ["A", "C", "G", "T"],
+    ["A", "C", "T", "G"],
+    ["A", "G", "C", "T"],
+    ["A", "G", "T", "C"],
+    ["A", "T", "C", "G"],
+    ["A", "T", "G", "C"],
+    ["C", "A", "G", "T"],
+    ["C", "A", "T", "G"],
+    ["C", "G", "A", "T"],
+    ["C", "G", "T", "A"],
+    ["C", "T", "A", "G"],
+    ["C", "T", "G", "A"],
+    ["G", "A", "C", "T"],
+    ["G", "A", "T", "C"],
+    ["G", "C", "A", "T"],
+    ["G", "C", "T", "A"],
+    ["G", "T", "A", "C"],
+    ["G", "T", "C", "A"],
+    ["T", "A", "C", "G"],
+    ["T", "A", "G", "C"],
+    ["T", "C", "A", "G"],
+    ["T", "C", "G", "A"],
+    ["T", "G", "A", "C"],
+    ["T", "G", "C", "A"],
+  ];
+
+  candidates.forEach((candidate) => {
+    const bases = candidate.replace(/[^ACGT]/g, "");
+    permutations.forEach((permutation) => {
+      const map = new Map(permutation.map((base, index) => [base, index.toString(2).padStart(2, "0")]));
+      let bits = "";
+      for (const base of bases) {
+        bits += map.get(base);
+      }
+      for (let offset = 0; offset < 8 && bits.length - offset >= 32; offset += 2) {
+        const usable = bits.slice(offset, bits.length - ((bits.length - offset) % 8));
+        const bytes = [];
+        for (let index = 0; index + 8 <= usable.length && bytes.length < MAX_TEXT_BYTES; index += 8) {
+          bytes.push(parseInt(usable.slice(index, index + 8), 2));
+        }
+        addDerivedTextResult(bucket, "dna-2bit", `DNA 2-bit ${permutation.join("")} offset ${offset}`, Buffer.from(bytes).toString("utf8"), {
+          scoreBoost: 0.6,
+        });
+      }
+    });
+  });
+}
+
+function decodeQuotedPrintable(value) {
+  const source = String(value || "").replace(/=\r?\n/g, "");
+  const bytes = [];
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === "=" && /^[0-9a-fA-F]{2}$/.test(source.slice(index + 1, index + 3))) {
+      bytes.push(parseInt(source.slice(index + 1, index + 3), 16));
+      index += 2;
+      continue;
+    }
+    bytes.push(source.charCodeAt(index) & 0xff);
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
+function collectQuotedPrintableDecodes(text, bucket) {
+  const source = String(text || "");
+  if (!/(?:=[0-9a-fA-F]{2}|=\r?\n)/.test(source)) {
+    return;
+  }
+
+  const matches = dedupeStrings(
+    [
+      source,
+      ...Array.from(source.matchAll(/((?:[A-Za-z0-9+/_. -]*=[0-9a-fA-F]{2}[A-Za-z0-9+/_.= -]*){2,})/g)).map((match) => match[1]),
+    ].slice(0, 8),
+  );
+  matches.forEach((value) => {
+    addDerivedTextResult(bucket, "quoted-printable", "Quoted-Printable", decodeQuotedPrintable(value), { scoreBoost: 0.5 });
+  });
+}
+
+function decodeUuencodeBlock(text) {
+  const lines = String(text || "").split(/\r?\n/);
+  const beginIndex = lines.findIndex((line) => /^begin\s+[0-7]{3}\s+\S+/.test(line.trim()));
+  if (beginIndex === -1) {
+    return null;
+  }
+
+  const bytes = [];
+  for (let lineIndex = beginIndex + 1; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex].replace(/\r$/, "");
+    if (/^end\s*$/.test(line.trim())) {
+      break;
+    }
+    if (!line) {
+      continue;
+    }
+
+    const expectedLength = (line.charCodeAt(0) - 32) & 0x3f;
+    if (expectedLength === 0) {
+      continue;
+    }
+
+    const lineBytes = [];
+    for (let index = 1; index < line.length; index += 4) {
+      const chunk = line.slice(index, index + 4).padEnd(4, " ");
+      const values = Array.from(chunk).map((char) => (char.charCodeAt(0) - 32) & 0x3f);
+      lineBytes.push((values[0] << 2) | (values[1] >> 4));
+      lineBytes.push(((values[1] & 0x0f) << 4) | (values[2] >> 2));
+      lineBytes.push(((values[2] & 0x03) << 6) | values[3]);
+    }
+    bytes.push(...lineBytes.slice(0, expectedLength));
+  }
+
+  return bytes.length ? Buffer.from(bytes).toString("utf8") : null;
+}
+
+function collectUuencodeDecodes(text, bucket) {
+  if (!/^begin\s+[0-7]{3}\s+\S+/m.test(String(text || ""))) {
+    return;
+  }
+  addDerivedTextResult(bucket, "uuencode", "UUEncode", decodeUuencodeBlock(text), { scoreBoost: 0.8 });
+}
+
+function collectBase91Decodes(text, bucket) {
+  const alphabetPattern = /[A-Za-z0-9!#$%&()*+,./:;<=>?@[\]^_`{|}~"]/;
+  const source = String(text || "");
+  const candidates = dedupeStrings(
+    source
+      .split(/\r?\n/)
+      .concat(source)
+      .map((line) => line.trim())
+      .filter((line) => line.length >= 12 && line.length <= 512)
+      .filter((line) => {
+        const compact = line.replace(/\s+/g, "");
+        const validChars = Array.from(compact).filter((char) => alphabetPattern.test(char)).length;
+        const symbolCount = (compact.match(/[!#$%&()*+,./:;<=>?@[\]^_`{|}~"]/g) || []).length;
+        return compact.length >= 12 && validChars / compact.length > 0.96 && symbolCount >= 2;
+      })
+      .slice(0, 10),
+  );
+
+  candidates.forEach((value) => {
+    try {
+      collectTextVariantsFromBuffer(base91Decode(value), "BASE91", bucket);
+    } catch (_error) {
+      // ignore invalid Base91 candidates
+    }
+  });
+}
+
+function collectZ85Decodes(text, bucket) {
+  const alphabetPattern = /[0-9a-zA-Z.\-:+=^!/*?&<>()[\]{}@%$#]/;
+  const source = String(text || "");
+  const candidates = dedupeStrings(
+    source
+      .split(/\r?\n/)
+      .concat(source)
+      .flatMap((line) => line.match(/[0-9a-zA-Z.\-:+=^!/*?&<>()[\]{}@%$#]{20,}/g) || [])
+      .map((line) => line.trim())
+      .filter((line) => line.length >= 20 && line.length <= 512 && line.length % 5 === 0)
+      .filter((line) => {
+        const validChars = Array.from(line).filter((char) => alphabetPattern.test(char)).length;
+        const symbolCount = (line.match(/[.\-:+=^!/*?&<>()[\]{}@%$#]/g) || []).length;
+        return validChars / line.length > 0.98 && symbolCount >= 1;
+      })
+      .slice(0, 10),
+  );
+
+  candidates.forEach((value) => {
+    try {
+      collectTextVariantsFromBuffer(z85Decode(value), "Z85", bucket);
+    } catch (_error) {
+      // ignore invalid Z85 candidates
+    }
+  });
+}
+
+function normalizeMorseCandidate(value) {
+  return String(value || "")
+    .replace(/[·•]/g, ".")
+    .replace(/[‐‑‒–—−_]/g, "-")
+    .replace(/[|\\]/g, "/")
+    .replace(/\s*\/\s*/g, " / ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function decodeMorsePattern(pattern) {
+  const normalized = normalizeMorseCandidate(pattern);
+  if (!normalized || !/[.-]/.test(normalized)) {
+    return "";
+  }
+
+  let valid = 0;
+  const words = normalized.split(/\s+\/\s+/).map((word) => word.trim()).filter(Boolean);
+  const decoded = words
+    .map((word) =>
+      word
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((token) => {
+          const value = MORSE_DECODE_MAP[token] || "?";
+          if (value !== "?") {
+            valid += 1;
+          }
+          return value;
+        })
+        .join(""),
+    )
+    .join(" ");
+
+  return valid >= 4 && !/^[?\s]+$/.test(decoded) ? decoded : "";
+}
+
+function collectMorseTextDecodes(text, bucket) {
+  const source = String(text || "");
+  const candidates = dedupeStrings(
+    source
+      .split(/\r?\n/)
+      .concat(source)
+      .map((line) => line.trim())
+      .filter((line) => {
+        if (line.length < 12 || !/[.\-·•–—−_]/.test(line)) {
+          return false;
+        }
+        const morseChars = (line.match(/[.\-·•–—−_\/|\\\s]/g) || []).length;
+        const tokenCount = normalizeMorseCandidate(line).split(/\s+/).filter((token) => token && token !== "/").length;
+        return tokenCount >= 4 && morseChars / line.length > 0.72;
+      })
+      .slice(0, 12),
+  );
+
+  candidates.forEach((value) => {
+    addDerivedTextResult(bucket, "morse", "Morse text", decodeMorsePattern(value), { scoreBoost: 0.8 });
+  });
+}
+
+function decodePolybiusPairs(value) {
+  const alphabet = "ABCDEFGHIKLMNOPQRSTUVWXYZ";
+  const source = String(value || "").trim();
+  const tokens = source.match(/[1-5][1-5]|[\/|]/g) || [];
+  if (tokens.length < 4) {
+    return "";
+  }
+
+  return tokens
+    .map((token) => {
+      if (token === "/" || token === "|") {
+        return "-";
+      }
+      const row = Number(token[0]);
+      const column = Number(token[1]);
+      return alphabet[(row - 1) * 5 + (column - 1)] || "";
+    })
+    .join("");
+}
+
+function collectPolybiusDecodes(text, bucket) {
+  const matches = dedupeStrings(
+    Array.from(String(text || "").matchAll(/(?:^|[^1-5])((?:[1-5][1-5][\s,;:_-]*){4,}(?:[\/|][\s,;:_-]*(?:[1-5][1-5][\s,;:_-]*){2,})*)(?=$|[^1-5])/g))
+      .map((match) => match[1])
+      .slice(0, 10),
+  );
+
+  matches.forEach((value) => {
+    addDerivedTextResult(bucket, "polybius", "Polybius 5x5 coordinates", decodePolybiusPairs(value), { scoreBoost: 0.7 });
+  });
+}
+
 function atbashText(text) {
   return String(text || "").replace(/[A-Za-z]/g, (char) => {
     const code = char.charCodeAt(0);
@@ -867,12 +1314,79 @@ function rot47Text(text) {
   });
 }
 
+function railFenceDecode(cipherText, rails) {
+  const text = String(cipherText || "");
+  if (rails < 2 || text.length < rails * 2) {
+    return "";
+  }
+
+  const pattern = [];
+  let rail = 0;
+  let direction = 1;
+  for (let index = 0; index < text.length; index += 1) {
+    pattern.push(rail);
+    if (rail === 0) direction = 1;
+    if (rail === rails - 1) direction = -1;
+    rail += direction;
+  }
+
+  const railLengths = Array.from({ length: rails }, (_, targetRail) => pattern.filter((item) => item === targetRail).length);
+  const railsData = [];
+  let cursor = 0;
+  railLengths.forEach((length) => {
+    railsData.push(Array.from(text.slice(cursor, cursor + length)));
+    cursor += length;
+  });
+
+  const positions = new Array(rails).fill(0);
+  return pattern.map((targetRail) => railsData[targetRail][positions[targetRail]++]).join("");
+}
+
+function modInverse(value, modulo) {
+  for (let candidate = 1; candidate < modulo; candidate += 1) {
+    if ((value * candidate) % modulo === 1) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function affineDecode(text, multiplier, shift) {
+  const inverse = modInverse(multiplier, 26);
+  if (!inverse) {
+    return "";
+  }
+
+  return String(text || "").replace(/[A-Za-z]/g, (char) => {
+    const code = char.charCodeAt(0);
+    const base = code >= 97 ? 97 : 65;
+    const value = code - base;
+    return String.fromCharCode(((inverse * (value - shift + 26)) % 26) + base);
+  });
+}
+
 function collectClassicalCipherDecodes(text, bucket, wholeTextTransformAllowed) {
   if (!wholeTextTransformAllowed) {
     return;
   }
   addDerivedTextResult(bucket, "rot47", "ROT47", rot47Text(text), { scoreBoost: 0.2 });
   addDerivedTextResult(bucket, "atbash", "ATBASH", atbashText(text), { scoreBoost: 0.2 });
+
+  const normalized = String(text || "").trim();
+  if (normalized.length >= 8 && normalized.length <= 180) {
+    for (let rails = 2; rails <= Math.min(8, Math.floor(normalized.length / 2)); rails += 1) {
+      addDerivedTextResult(bucket, "rail-fence", `Rail fence ${rails} rails`, railFenceDecode(normalized, rails), { scoreBoost: 0.2 });
+    }
+
+    const multipliers = [1, 3, 5, 7, 9, 11, 15, 17, 19, 21, 23, 25];
+    multipliers.forEach((multiplier) => {
+      for (let shift = 0; shift < 26; shift += 1) {
+        addDerivedTextResult(bucket, "affine", `Affine a=${multiplier} b=${shift}`, affineDecode(normalized, multiplier, shift), {
+          scoreBoost: 0.15,
+        });
+      }
+    });
+  }
 }
 
 function decodeBaconLetters(sequence, inverse = false) {
@@ -962,6 +1476,45 @@ function collectBrainfuckDecodes(text, bucket) {
   });
 }
 
+function ookToBrainfuck(text) {
+  const tokens = Array.from(String(text || "").matchAll(/Ook[.!?]/g)).map((match) => match[0].slice(3));
+  if (tokens.length < 2) {
+    return "";
+  }
+
+  const map = {
+    ".?": ">",
+    "?.": "<",
+    "..": "+",
+    "!!": "-",
+    "!.": ".",
+    ".!": ",",
+    "!?": "[",
+    "?!": "]",
+  };
+  let program = "";
+  for (let index = 0; index + 1 < tokens.length; index += 2) {
+    const op = map[`${tokens[index]}${tokens[index + 1]}`];
+    if (!op) {
+      return "";
+    }
+    program += op;
+  }
+  return program;
+}
+
+function collectOokDecodes(text, bucket) {
+  const matches = dedupeStrings(
+    Array.from(String(text || "").matchAll(/(?:Ook[.!?]\s*){20,}/g))
+      .map((match) => match[0])
+      .slice(0, 4),
+  );
+  matches.forEach((value) => {
+    const program = ookToBrainfuck(value);
+    addDerivedTextResult(bucket, "ook", "Ook! Brainfuck dialect", runBrainfuck(program), { scoreBoost: 1.1 });
+  });
+}
+
 function collectTextVariantsFromBuffer(buffer, label, bucket) {
   const decoded = decodeBufferAsText(buffer).trim();
   pushDecodedResult(bucket, {
@@ -1018,8 +1571,18 @@ function smartDecodeTextContent(buffer) {
   collectZeroWidthDecodes(text, results);
   collectWhitespaceStegoDecodes(text, results);
   collectNumericAndEscapeDecodes(text, results);
+  collectA1Z26Decodes(text, results);
+  collectNatoPhoneticDecodes(text, results);
+  collectDna2BitDecodes(text, results);
+  collectQuotedPrintableDecodes(text, results);
+  collectUuencodeDecodes(text, results);
+  collectBase91Decodes(text, results);
+  collectZ85Decodes(text, results);
+  collectMorseTextDecodes(text, results);
+  collectPolybiusDecodes(text, results);
   collectBaconDecodes(text, results);
   collectBrainfuckDecodes(text, results);
+  collectOokDecodes(text, results);
 
   encoded.base64.forEach((value) => {
     try {
@@ -4649,7 +5212,32 @@ async function buildArtifactSignals(filePath) {
     }
     if (
       smartDecoded.some((item) =>
-        ["xor", "rot13", "caesar", "base32", "bitstream", "unicode-tags", "bacon", "brainfuck", "rot47", "atbash", "decimal-bytes", "hex-bytes"].includes(item.type),
+        [
+          "xor",
+          "rot13",
+          "caesar",
+          "base32",
+          "bitstream",
+          "unicode-tags",
+          "bacon",
+          "brainfuck",
+          "ook",
+          "morse",
+          "polybius",
+          "a1z26",
+          "nato",
+          "dna-2bit",
+          "base91",
+          "z85",
+          "quoted-printable",
+          "uuencode",
+          "rot47",
+          "atbash",
+          "rail-fence",
+          "affine",
+          "decimal-bytes",
+          "hex-bytes",
+        ].includes(item.type),
       )
     ) {
       artifact.highlights.push("\u68c0\u6d4b\u5230\u53ef\u8fdb\u4e00\u6b65\u89e3\u7801\u7684\u6587\u672c\u9690\u5199\u6216\u7ecf\u5178\u7f16\u7801\u7ebf\u7d22\u3002");
@@ -4660,7 +5248,7 @@ async function buildArtifactSignals(filePath) {
         });
       }
     }
-    artifact.suggestions.push("\u5bf9\u6587\u672c\u4f18\u5148\u505a base/hex/XOR/ROT\u3001\u96f6\u5bbd/\u7a7a\u767d\u9690\u5199\u548c\u5206\u5757\u91cd\u7ec4\u3002");
+    artifact.suggestions.push("\u5bf9\u6587\u672c\u4f18\u5148\u505a base/hex/XOR/ROT\u3001\u6570\u5b57\u5750\u6807\u3001Morse/NATO/DNA\u3001\u96f6\u5bbd/\u7a7a\u767d\u9690\u5199\u548c\u5206\u5757\u91cd\u7ec4\u3002");
   } else if (artifact.family === "document") {
     artifact.summary = "\u6587\u6863\u7c7b\u9644\u4ef6\uff0c\u9700\u8981\u68c0\u67e5\u5185\u5d4c\u6587\u672c\u3001\u5173\u952e\u5b57\u3001\u9644\u4ef6\u548c\u5143\u6570\u636e\u3002";
     if (artifact.badge === "PDF" && pdfReport) {
@@ -5530,7 +6118,7 @@ function decodeEncodedText(filePath, outputRoot) {
   const decoded = smartDecodeTextContent(buffer);
 
   if (!decoded.length) {
-    throw new Error("\u6ca1\u6709\u627e\u5230\u53ef\u76f4\u63a5\u89e3\u7801\u7684 Base/Hex/XOR/ROT/\u96f6\u5bbd/\u7a7a\u767d/Bacon/Brainfuck \u7ebf\u7d22\u3002");
+    throw new Error("\u6ca1\u6709\u627e\u5230\u53ef\u76f4\u63a5\u89e3\u7801\u7684 Base/Hex/XOR/ROT/\u96f6\u5bbd/\u7a7a\u767d/Morse/Polybius/Bacon/Brainfuck/Ook \u7ebf\u7d22\u3002");
   }
 
   const sections = decoded.map((item, index) => {

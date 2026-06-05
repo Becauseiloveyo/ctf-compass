@@ -34,4 +34,5 @@
 
 - Treat it as classification first, not brute force.
 - Check whether it reduces to encoding, stego, logic, scripting, or protocol analysis.
-
+- For text-heavy misc, try deterministic local routes first: base encodings including Base91 and Z85, URL/quoted-printable/UUEncode, A1Z26, NATO phonetic words, Morse, Polybius, DNA 2-bit streams, Bacon, Brainfuck/Ook, ROT/Caesar/Affine/Rail Fence, XOR, zero-width characters, and whitespace stego.
+- For file-heavy misc, recurse through archives and generated artifacts before switching to manual tooling.
