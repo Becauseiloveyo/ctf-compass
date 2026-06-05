@@ -108,7 +108,7 @@ const STRINGS = {
   emptyArtifactPreview: "\u8fd8\u6ca1\u6709\u6dfb\u52a0\u9644\u4ef6\u3002",
   emptyArtifactDetail: "\u6ca1\u6709\u53ef\u5c55\u793a\u7684\u9644\u4ef6\uff0c\u5148\u6dfb\u52a0\u6587\u4ef6\u6216\u6587\u4ef6\u5939\u3002",
   emptyResultsCategory: "\u7b49\u5f85\u5206\u6790",
-  emptyResultsSummary: "运行后会显示自动动作、候选 flag 和仍需人工补充的信息。",
+  emptyResultsSummary: "运行后会显示自��动作、候选 flag 和仍需人工补充的信息。",
   emptyFlags: "\u6682\u65e0 flag \u5019\u9009\u3002",
   emptyPipeline: "还没有执行自动动作。",
   statusReady: "\u5148\u6dfb\u52a0\u9898\u76ee\u4fe1\u606f\u6216\u9644\u4ef6\uff0c\u518d\u8fdb\u884c\u5206\u6790\u3002",
@@ -179,6 +179,9 @@ let saveTimer = null;
 
 const elements = {
   body: document.body,
+  shell: document.querySelector(".shell"),
+  sidebar: document.getElementById("sidebar"),
+  sidebarToggle: document.getElementById("sidebar-toggle"),
   navItems: Array.from(document.querySelectorAll(".nav-item")),
   views: {
     workspace: document.getElementById("workspace-view"),
@@ -475,6 +478,18 @@ function setTheme(theme) {
 
 function toggleTheme() {
   setTheme(state.theme === "light" ? "dark" : "light");
+}
+
+function toggleSidebar() {
+  const isCollapsed = elements.shell.classList.toggle("sidebar-collapsed");
+  localStorage.setItem("ctf-sidebar-collapsed", isCollapsed ? "1" : "0");
+}
+
+function initSidebarState() {
+  const collapsed = localStorage.getItem("ctf-sidebar-collapsed") === "1";
+  if (collapsed) {
+    elements.shell.classList.add("sidebar-collapsed");
+  }
 }
 
 function uniqArtifacts(items) {
@@ -1773,6 +1788,7 @@ elements.navItems.forEach((button) => {
 
 elements.themeToggle.addEventListener("click", toggleTheme);
 elements.settingsThemeToggle.addEventListener("click", toggleTheme);
+elements.sidebarToggle.addEventListener("click", toggleSidebar);
 elements.exportReportButton.addEventListener("click", exportReport);
 elements.settingsExportReportButton.addEventListener("click", exportReport);
 elements.clearWorkspaceButton.addEventListener("click", clearWorkspace);
@@ -1819,6 +1835,7 @@ elements.artifactDropzone.addEventListener("drop", (event) => {
 });
 
 setTheme(state.theme);
+initSidebarState();
 applyStaticCopy();
 renderAll();
 setStatus(STRINGS.statusReady);
