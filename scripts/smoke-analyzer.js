@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const zlib = require("zlib");
 const AdmZip = require("adm-zip");
 const { analyzeChallenge } = require("../desktop/analyzer");
 
@@ -96,6 +97,104 @@ function createPseudoEncryptedZip(zipPath, flag) {
   zip.writeZip(zipPath);
   markZipAsPseudoEncrypted(zipPath);
   return zipPath;
+}
+
+function writeTarField(header, offset, length, value) {
+  const buffer = Buffer.from(String(value), "ascii");
+  buffer.copy(header, offset, 0, Math.min(buffer.length, length));
+}
+
+function writeTarOctal(header, offset, length, value) {
+  const text = Math.max(0, Number(value) || 0)
+    .toString(8)
+    .padStart(length - 1, "0")
+    .slice(-(length - 1));
+  writeTarField(header, offset, length, `${text}\0`);
+}
+
+function createTarBuffer(entries) {
+  const chunks = [];
+  entries.forEach((entry) => {
+    const data = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(entry.data, "utf8");
+    const header = Buffer.alloc(512);
+    writeTarField(header, 0, 100, entry.name);
+    writeTarOctal(header, 100, 8, 0o644);
+    writeTarOctal(header, 108, 8, 0);
+    writeTarOctal(header, 116, 8, 0);
+    writeTarOctal(header, 124, 12, data.length);
+    writeTarOctal(header, 136, 12, Math.floor(Date.now() / 1000));
+    header.fill(32, 148, 156);
+    writeTarField(header, 156, 1, "0");
+    writeTarField(header, 257, 6, "ustar\0");
+    writeTarField(header, 263, 2, "00");
+    let checksum = 0;
+    for (const byte of header) checksum += byte;
+    writeTarOctal(header, 148, 8, checksum);
+    chunks.push(header, data, Buffer.alloc((512 - (data.length % 512)) % 512));
+  });
+  chunks.push(Buffer.alloc(1024));
+  return Buffer.concat(chunks);
+}
+
+function createTgz(tgzPath, flag) {
+  const tar = createTarBuffer([
+    { name: "clues/readme.txt", data: "recursive tar smoke fixture\n" },
+    { name: "nested/flag.txt", data: `${flag}\n` },
+  ]);
+  fs.mkdirSync(path.dirname(tgzPath), { recursive: true });
+  fs.writeFileSync(tgzPath, zlib.gzipSync(tar));
+  return tgzPath;
+}
+
+function createBmpLsb(bmpPath, text, width = 32, height = 16) {
+  const bits = Array.from(Buffer.from(text, "utf8")).flatMap((byte) => byte.toString(2).padStart(8, "0").split("").map(Number));
+  if (bits.length > width * height) {
+    throw new Error("BMP smoke fixture is too small for payload");
+  }
+
+  const bitsPerPixel = 24;
+  const rowStride = Math.floor((bitsPerPixel * width + 31) / 32) * 4;
+  const dataOffset = 54;
+  const buffer = Buffer.alloc(dataOffset + rowStride * height);
+  buffer.write("BM", 0, "ascii");
+  buffer.writeUInt32LE(buffer.length, 2);
+  buffer.writeUInt32LE(dataOffset, 10);
+  buffer.writeUInt32LE(40, 14);
+  buffer.writeInt32LE(width, 18);
+  buffer.writeInt32LE(height, 22);
+  buffer.writeUInt16LE(1, 26);
+  buffer.writeUInt16LE(bitsPerPixel, 28);
+  buffer.writeUInt32LE(0, 30);
+  buffer.writeUInt32LE(rowStride * height, 34);
+
+  for (let storedY = 0; storedY < height; storedY += 1) {
+    const logicalY = height - 1 - storedY;
+    for (let x = 0; x < width; x += 1) {
+      const pixel = logicalY * width + x;
+      const offset = dataOffset + storedY * rowStride + x * 3;
+      buffer[offset] = 0x80 | (bits[pixel] || 0);
+      buffer[offset + 1] = 0x80;
+      buffer[offset + 2] = 0x80;
+    }
+  }
+
+  fs.mkdirSync(path.dirname(bmpPath), { recursive: true });
+  fs.writeFileSync(bmpPath, buffer);
+  return bmpPath;
+}
+
+function createGifSplitComment(gifPath, chunks) {
+  const header = Buffer.from("GIF89a", "ascii");
+  const logicalScreen = Buffer.from([0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]);
+  const commentParts = [Buffer.from([0x21, 0xfe])];
+  chunks.forEach((chunk) => {
+    const data = Buffer.from(chunk, "utf8");
+    commentParts.push(Buffer.from([data.length]), data);
+  });
+  commentParts.push(Buffer.from([0x00, 0x3b]));
+  fs.mkdirSync(path.dirname(gifPath), { recursive: true });
+  fs.writeFileSync(gifPath, Buffer.concat([header, logicalScreen, ...commentParts]));
+  return gifPath;
 }
 
 function createBrainfuckPrint(text) {
@@ -286,6 +385,51 @@ async function main() {
         artifacts: [pseudoZipPath],
       },
       pseudoZipFlag,
+    ),
+  );
+
+  const tgzFlag = "flag{tgz_tar_recursive_smoke}";
+  const tgzPath = createTgz(path.join(root, "input", "recursive.tgz"), tgzFlag);
+  results.push(
+    await runCase(
+      root,
+      "tgz-tar-recursive",
+      {
+        title: "tgz tar recursive smoke",
+        description: "TGZ should inflate to TAR and recursively expose the flag file.",
+        artifacts: [tgzPath],
+      },
+      tgzFlag,
+    ),
+  );
+
+  const bmpFlag = "flag{bmp_lsb_smoke}";
+  const bmpPath = createBmpLsb(path.join(root, "input", "hidden.bmp"), bmpFlag);
+  results.push(
+    await runCase(
+      root,
+      "bmp-lsb",
+      {
+        title: "bmp lsb smoke",
+        description: "BMP blue-channel LSB should be decoded locally.",
+        artifacts: [bmpPath],
+      },
+      bmpFlag,
+    ),
+  );
+
+  const gifFlag = "flag{gif_comment_smoke}";
+  const gifPath = createGifSplitComment(path.join(root, "input", "comment.gif"), ["flag{gif_", "comment_", "smoke}"]);
+  results.push(
+    await runCase(
+      root,
+      "gif-split-comment",
+      {
+        title: "gif split comment smoke",
+        description: "GIF comment sub-blocks should be reassembled before flag scanning.",
+        artifacts: [gifPath],
+      },
+      gifFlag,
     ),
   );
 

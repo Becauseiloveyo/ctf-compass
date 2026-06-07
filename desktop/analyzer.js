@@ -210,7 +210,7 @@ const BUNDLED_TOOL_CAPABILITIES = [
     id: "binwalk-lite",
     label: "内置 binwalk-lite",
     replaces: "binwalk scan",
-    purpose: "按魔数扫描 ZIP、GZIP、PNG、PDF、ELF、7Z、RAR 等嵌入载荷并递归提取。",
+    purpose: "按魔数扫描 ZIP、GZIP、TAR、PNG、PDF、ELF、7Z、RAR 等载荷，并递归解包 ZIP/GZIP/TAR/TGZ。",
   },
   {
     id: "ciphey-lite",
@@ -222,7 +222,7 @@ const BUNDLED_TOOL_CAPABILITIES = [
     id: "zsteg-lite",
     label: "内置 zsteg-lite",
     replaces: "zsteg",
-    purpose: "扫描 PNG 文本块与常见 RGB/RGBA 低位平面可读文本候选。",
+    purpose: "扫描 PNG 文本块、PNG/BMP 常见 RGB/RGBA 低位平面，以及 GIF 扩展文本候选。",
   },
   {
     id: "f5-jpeg-lite",
@@ -311,7 +311,7 @@ function safeArchivePath(entryName) {
   return entryName
     .split(/[\\/]+/)
     .filter(Boolean)
-    .map((segment) => sanitizeSegment(segment) || "_")
+    .map((segment) => (segment === "." || segment === ".." ? "_" : sanitizeSegment(segment) || "_"))
     .join(path.sep);
 }
 
@@ -1773,6 +1773,26 @@ function isOfficePackageExtension(extension) {
   return OFFICE_DOCUMENT_EXTENSIONS.includes(extension);
 }
 
+function isTarBuffer(buffer) {
+  if (!buffer || buffer.length < 512) {
+    return false;
+  }
+  const magic = buffer.subarray(257, 263).toString("ascii").replace(/\0/g, "");
+  if (magic === "ustar") {
+    return true;
+  }
+
+  const storedChecksum = parseInt(buffer.subarray(148, 156).toString("ascii").replace(/\0/g, "").trim(), 8);
+  if (!Number.isFinite(storedChecksum)) {
+    return false;
+  }
+  let checksum = 0;
+  for (let index = 0; index < 512; index += 1) {
+    checksum += index >= 148 && index < 156 ? 32 : buffer[index];
+  }
+  return checksum === storedChecksum;
+}
+
 function detectMagic(buffer) {
   if (
     buffer.length >= 12 &&
@@ -1787,8 +1807,11 @@ function detectMagic(buffer) {
   if (buffer.length >= 3 && buffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) {
     return "jpeg";
   }
-  if (buffer.length >= 6 && buffer.subarray(0, 6).toString("ascii") === "GIF89a") {
+  if (buffer.length >= 6 && ["GIF87a", "GIF89a"].includes(buffer.subarray(0, 6).toString("ascii"))) {
     return "gif";
+  }
+  if (buffer.length >= 2 && buffer.subarray(0, 2).toString("ascii") === "BM") {
+    return "bmp";
   }
   if (buffer.length >= 4 && (buffer.readUInt32LE(0) === 0xa1b2c3d4 || buffer.readUInt32LE(0) === 0xd4c3b2a1)) {
     return "pcap";
@@ -1810,6 +1833,9 @@ function detectMagic(buffer) {
   }
   if (buffer.length >= 3 && buffer[0] === 0x1f && buffer[1] === 0x8b && buffer[2] === 0x08) {
     return "gzip";
+  }
+  if (isTarBuffer(buffer)) {
+    return "tar";
   }
   return "";
 }
@@ -1879,7 +1905,7 @@ function detectFamily(filePath, sample) {
   if (magic === "pdf" || isOfficePackageExtension(extension) || [".doc", ".xls", ".ppt"].includes(extension)) {
     return { family: "document", badge: magic === "pdf" ? "PDF" : extension.slice(1).toUpperCase() || "DOC" };
   }
-  if (["png", "jpeg", "gif"].includes(magic) || [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg"].includes(extension)) {
+  if (["png", "jpeg", "gif", "bmp"].includes(magic) || [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg"].includes(extension)) {
     return { family: "image", badge: magic ? magic.toUpperCase() : extension.slice(1).toUpperCase() || "IMG" };
   }
   if (magic === "wav" || [".wav", ".mp3", ".flac", ".ogg", ".m4a"].includes(extension)) {
@@ -1891,7 +1917,7 @@ function detectFamily(filePath, sample) {
   if (extension === ".apk") {
     return { family: "binary", badge: "APK" };
   }
-  if (["zip", "gzip"].includes(magic) || [".zip", ".7z", ".rar", ".tar", ".gz", ".tgz"].includes(extension)) {
+  if (["zip", "gzip", "tar"].includes(magic) || [".zip", ".7z", ".rar", ".tar", ".gz", ".tgz"].includes(extension)) {
     return { family: "archive", badge: magic.toUpperCase() || extension.slice(1).toUpperCase() || "ZIP" };
   }
   if (["elf", "pe"].includes(magic) || [".exe", ".dll", ".bin", ".so", ".elf", ".apk", ".jar"].includes(extension)) {
@@ -1993,6 +2019,63 @@ function readPngDimensions(buffer) {
   };
 }
 
+function decodeBmpRaster(buffer) {
+  if (detectMagic(buffer) !== "bmp" || buffer.length < 54) {
+    return null;
+  }
+
+  const dataOffset = buffer.readUInt32LE(10);
+  const dibSize = buffer.readUInt32LE(14);
+  const width = buffer.readInt32LE(18);
+  const storedHeight = buffer.readInt32LE(22);
+  const planes = buffer.readUInt16LE(26);
+  const bitsPerPixel = buffer.readUInt16LE(28);
+  const compression = buffer.readUInt32LE(30);
+  const height = Math.abs(storedHeight);
+  const topDown = storedHeight < 0;
+
+  if (
+    dibSize < 40 ||
+    width <= 0 ||
+    height <= 0 ||
+    width > 16000 ||
+    height > 16000 ||
+    width * height > 40_000_000 ||
+    planes !== 1 ||
+    ![24, 32].includes(bitsPerPixel) ||
+    compression !== 0
+  ) {
+    return null;
+  }
+
+  const bytesPerPixel = bitsPerPixel / 8;
+  const rowStride = Math.floor((bitsPerPixel * width + 31) / 32) * 4;
+  if (dataOffset < 0 || dataOffset + rowStride * height > buffer.length) {
+    return null;
+  }
+
+  const data = Buffer.alloc(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    const sourceY = topDown ? y : height - 1 - y;
+    const rowOffset = dataOffset + sourceY * rowStride;
+    for (let x = 0; x < width; x += 1) {
+      const sourceOffset = rowOffset + x * bytesPerPixel;
+      const targetOffset = (y * width + x) * 4;
+      data[targetOffset] = buffer[sourceOffset + 2];
+      data[targetOffset + 1] = buffer[sourceOffset + 1];
+      data[targetOffset + 2] = buffer[sourceOffset];
+      data[targetOffset + 3] = bitsPerPixel === 32 ? buffer[sourceOffset + 3] : 255;
+    }
+  }
+
+  return {
+    format: "bmp",
+    width,
+    height,
+    data,
+  };
+}
+
 function decodeImageRaster(buffer) {
   const magic = detectMagic(buffer);
   if (magic === "png") {
@@ -2012,6 +2095,9 @@ function decodeImageRaster(buffer) {
       height: parsed.height,
       data: Buffer.from(parsed.data),
     };
+  }
+  if (magic === "bmp") {
+    return decodeBmpRaster(buffer);
   }
   return null;
 }
@@ -2863,14 +2949,18 @@ function buildPngStreams(parsed, traversal = "xy") {
 }
 
 function collectPngLSBCandidates(buffer) {
-  if (detectMagic(buffer) !== "png") {
+  const magic = detectMagic(buffer);
+  if (!["png", "bmp"].includes(magic)) {
     return [];
   }
 
   let parsed;
   try {
-    parsed = PNG.sync.read(buffer, { checkCRC: false });
+    parsed = decodeImageRaster(buffer);
   } catch (_error) {
+    return [];
+  }
+  if (!parsed) {
     return [];
   }
 
@@ -2882,7 +2972,7 @@ function collectPngLSBCandidates(buffer) {
         ["msb", "lsb"].forEach((bitOrder) => {
           const bits = values.map((value) => (value >> bitPlane) & 1);
           const decoded = decodeBufferAsText(bitsToBuffer(bits, bitOrder));
-          const flags = findFlagCandidates(decoded, `PNG-${traversal}-${name}-bit${bitPlane}-${bitOrder}`);
+          const flags = findFlagCandidates(decoded, `${magic.toUpperCase()}-${traversal}-${name}-bit${bitPlane}-${bitOrder}`);
           const printable = extractPrintableSegments(decoded, 12, 8);
           const score = Math.max(scoreDecodedText(decoded), flags.length ? 24 : 0);
           if (!flags.length && (!printable.length || score < 8)) {
@@ -4830,7 +4920,7 @@ async function buildArtifactSignals(filePath) {
     try {
       imageRaster = decodeImageRaster(buffer);
       qrPayload = imageRaster ? detectQrPayload(buffer) : null;
-      barcodePayload = imageRaster ? await detectBarcodePayload(filePath) : null;
+      barcodePayload = imageRaster && ["PNG", "JPEG"].includes(artifact.badge) ? await detectBarcodePayload(filePath) : null;
     } catch (_error) {
       imageRaster = null;
       qrPayload = null;
@@ -4888,6 +4978,37 @@ async function buildArtifactSignals(filePath) {
       const bitCandidates = collectPngLSBCandidates(buffer);
       if (bitCandidates.length) {
         artifact.highlights.push(`PNG \u4f4e\u4f4d\u5e73\u9762\u547d\u4e2d ${bitCandidates.length} \u7ec4\u53ef\u8bfb\u7ebf\u7d22\u3002`);
+      }
+    }
+    if (artifact.badge === "BMP") {
+      artifact.keywords.push("image", "bmp", "stego");
+      artifact.actions.push({
+        id: "extract-png-lsb",
+        label: "\u63d0\u53d6 BMP \u4f4e\u4f4d\u5e73\u9762",
+      });
+      const bitCandidates = collectPngLSBCandidates(buffer);
+      if (bitCandidates.length) {
+        artifact.highlights.push(`BMP \u4f4e\u4f4d\u5e73\u9762\u547d\u4e2d ${bitCandidates.length} \u7ec4\u53ef\u8bfb\u7ebf\u7d22\u3002`);
+      }
+    }
+    if (artifact.badge === "GIF") {
+      const gifExtensions = parseGifTextExtensions(buffer);
+      artifact.keywords.push("image", "gif");
+      artifact.actions.push({
+        id: "extract-image-metadata",
+        label: "\u63d0\u53d6 GIF \u6269\u5c55\u6587\u672c",
+      });
+      if (gifExtensions.length) {
+        artifact.highlights.push(`GIF \u6ce8\u91ca/\u5e94\u7528/\u7eaf\u6587\u672c\u6269\u5c55 ${gifExtensions.length} \u4e2a\u3002`);
+        const gifFlags = gifExtensions.flatMap((item) =>
+          findFlagCandidates(`${item.identifier}\n${item.text}`, `${artifact.name} (GIF ${item.kind})`),
+        );
+        artifact.flagCandidates = dedupeStrings(
+          artifact.flagCandidates.map((item) => `${item.value}@@${item.source}`).concat(gifFlags.map((item) => `${item.value}@@${item.source}`)),
+        ).map((entry) => {
+          const [value, source] = entry.split("@@");
+          return { value, source };
+        });
       }
     }
     if (imageRaster) {
@@ -5079,14 +5200,16 @@ async function buildArtifactSignals(filePath) {
     });
   } else if (artifact.family === "archive") {
     artifact.summary = "\u538b\u7f29\u5305\u7c7b\u9644\u4ef6\uff0c\u5e38\u89c1\u7ebf\u7d22\u662f\u5d4c\u5957\u6587\u4ef6\u3001\u8bc4\u8bba\u3001\u989d\u5916\u76ee\u5f55\u6216\u5bc6\u7801\u63d0\u793a\u3002";
-    artifact.keywords.push("archive", "zip");
+    artifact.keywords.push("archive", artifact.badge.toLowerCase());
     if (artifact.badge === "GZIP") {
       artifact.highlights.push("GZIP \u538b\u7f29\u6d41\uff0c\u53ef\u76f4\u63a5\u89e3\u538b\u7ee7\u7eed\u9012\u5f52\u5206\u6790\u3002");
+    } else if (artifact.badge === "TAR") {
+      artifact.highlights.push("TAR \u5f52\u6863\uff0c\u53ef\u76f4\u63a5\u89e3\u5305\u5e76\u9012\u5f52\u5206\u6790\u5185\u90e8\u6587\u4ef6\u3002");
     }
     artifact.suggestions.push("\u89e3\u538b\u540e\u68c0\u67e5\u9690\u85cf\u76ee\u5f55\u3001\u6ce8\u91ca\u3001\u5d4c\u5957\u6587\u4ef6\u548c\u4e0e flag \u76f8\u5173\u7684\u6587\u4ef6\u540d\u3002");
     artifact.actions.push({
       id: "extract-archive",
-      label: artifact.badge === "GZIP" ? "\u89e3\u538b GZIP" : "\u89e3\u5305 ZIP",
+      label: artifact.badge === "GZIP" ? "\u89e3\u538b GZIP" : artifact.badge === "TAR" ? "\u89e3\u5305 TAR" : "\u89e3\u5305 ZIP",
     });
   } else if (artifact.family === "binary") {
     artifact.summary = "\u4e8c\u8fdb\u5236\u7c7b\u9644\u4ef6\uff0c\u53ef\u4ece strings\u3001\u5bfc\u5165\u8868\u3001\u6821\u9a8c\u5b57\u7b26\u4e32\u548c\u63a7\u5236\u6d41\u5207\u5165\u3002";
@@ -5542,10 +5665,10 @@ function buildFailureGuide(error, action, artifact) {
     guide.title = "压缩包未能自动解包";
     guide.steps = [
       "确认压缩包是否加密；如果题目给过密码，把密码写入备注后重新分析。",
-      "检查是否是 RAR/7Z/TAR 等当前内置解包不支持的格式；这类文件可选使用 7-Zip 或 binwalk 复核。",
+      "检查是否是 RAR/7Z 等当前内置解包不支持的格式；这类文件可选使用 7-Zip 或 binwalk 复核。",
       "如果是嵌套压缩包，先确认第一层是否成功提取，再从生成文件继续分析。",
     ];
-    guide.fallback = "内置解包覆盖 ZIP/GZIP；复杂压缩格式建议用 7-Zip、binwalk 或手动指定密码处理。";
+    guide.fallback = "内置解包覆盖 ZIP/GZIP/TAR/TGZ；复杂压缩格式建议用 7-Zip、binwalk 或手动指定密码处理。";
   } else if (actionId === "decode-encoded-text") {
     guide.title = "文本没有可直接还原的编码层";
     guide.steps = [
@@ -5976,15 +6099,127 @@ function repairPseudoEncryptedZip(buffer) {
   return changed ? repaired : null;
 }
 
+function readTarString(buffer, start, length) {
+  return buffer.subarray(start, start + length).toString("utf8").replace(/\0.*$/s, "").trim();
+}
+
+function readTarNumber(buffer, start, length) {
+  const field = buffer.subarray(start, start + length);
+  if (field.length && field[0] & 0x80) {
+    let value = BigInt(field[0] & 0x7f);
+    for (let index = 1; index < field.length; index += 1) {
+      value = (value << 8n) | BigInt(field[index]);
+    }
+    return Number(value);
+  }
+  const text = field.toString("ascii").replace(/\0/g, "").trim();
+  return text ? parseInt(text, 8) : 0;
+}
+
+function parseTarPaxPath(data) {
+  const text = data.toString("utf8");
+  for (const line of text.split(/\r?\n/)) {
+    const match = line.match(/^\d+\s+path=(.+)$/);
+    if (match) {
+      return match[1].trim();
+    }
+  }
+  return "";
+}
+
+function parseTarEntries(buffer) {
+  const entries = [];
+  let offset = 0;
+  let pendingLongName = "";
+  let pendingPaxPath = "";
+
+  while (offset + 512 <= buffer.length && entries.length < MAX_ARCHIVE_ENTRIES * 2) {
+    const header = buffer.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) {
+      break;
+    }
+
+    const size = readTarNumber(header, 124, 12);
+    const type = readTarString(header, 156, 1) || "0";
+    const name = readTarString(header, 0, 100);
+    const prefix = readTarString(header, 345, 155);
+    const headerName = prefix ? `${prefix}/${name}` : name;
+    const dataStart = offset + 512;
+    const dataEnd = dataStart + size;
+    if (!Number.isFinite(size) || size < 0 || dataEnd > buffer.length) {
+      break;
+    }
+
+    const data = buffer.subarray(dataStart, dataEnd);
+    if (type === "L") {
+      pendingLongName = data.toString("utf8").replace(/\0.*$/s, "").trim();
+    } else if (type === "x") {
+      pendingPaxPath = parseTarPaxPath(data);
+    } else {
+      const entryName = pendingPaxPath || pendingLongName || headerName;
+      entries.push({
+        name: entryName,
+        type,
+        size,
+        mtime: readTarNumber(header, 136, 12),
+        data,
+        isFile: ["0", "\0", "7"].includes(type),
+        isDirectory: type === "5",
+      });
+      pendingLongName = "";
+      pendingPaxPath = "";
+    }
+
+    offset = dataStart + Math.ceil(size / 512) * 512;
+  }
+
+  return entries;
+}
+
+function extractTarEntries(buffer, outputRoot) {
+  ensureOutputRoot(outputRoot);
+  const entries = parseTarEntries(buffer);
+  let totalBytes = 0;
+  const createdFiles = [];
+
+  for (const entry of entries.filter((item) => item.isFile).slice(0, MAX_ARCHIVE_ENTRIES)) {
+    totalBytes += entry.size;
+    if (totalBytes > MAX_ARCHIVE_TOTAL_BYTES) {
+      break;
+    }
+    const relativePath = safeArchivePath(entry.name);
+    if (!relativePath) {
+      continue;
+    }
+    const finalPath = path.join(outputRoot, relativePath);
+    ensureOutputRoot(path.dirname(finalPath));
+    fs.writeFileSync(finalPath, entry.data);
+    createdFiles.push(finalPath);
+  }
+
+  return { entries, createdFiles };
+}
+
+function buildTarClueReport(entries, filePath) {
+  const lines = ["# TAR CLUES", `file: ${path.basename(filePath)}`, "", "## entries"];
+  entries.slice(0, MAX_ARCHIVE_ENTRIES).forEach((entry) => {
+    const kind = entry.isDirectory ? "directory" : entry.isFile ? "file" : `type-${entry.type}`;
+    lines.push(`- ${entry.name} ${kind} size=${entry.size} mtime=${entry.mtime || 0}`);
+  });
+  return `${lines.join("\n")}\n`;
+}
+
 function extractArchive(filePath, outputRoot, options = {}) {
-  const sample = readSample(filePath, 16).buffer;
-  if (detectMagic(sample) === "gzip" || path.extname(filePath).toLowerCase() === ".gz") {
+  const sample = readSample(filePath, 512).buffer;
+  const archiveMagic = detectMagic(sample);
+  const extension = path.extname(filePath).toLowerCase();
+  if (archiveMagic === "gzip" || [".gz", ".tgz"].includes(extension)) {
     const buffer = fs.readFileSync(filePath);
     const inflated = zlib.gunzipSync(buffer, { maxOutputLength: MAX_ARCHIVE_TOTAL_BYTES });
     const parsed = path.parse(filePath);
     let generatedName = sanitizeSegment(parsed.name) || `${sanitizeSegment(parsed.base)}-inflated`;
     if (!path.extname(generatedName)) {
-      generatedName = `${generatedName}.bin`;
+      generatedName = `${generatedName}${extension === ".tgz" || detectMagic(inflated.subarray(0, 512)) === "tar" ? ".tar" : ".bin"}`;
     }
     const outPath = writeGeneratedFile(outputRoot, generatedName, inflated);
     return {
@@ -5994,6 +6229,18 @@ function extractArchive(filePath, outputRoot, options = {}) {
   }
 
   const zipBuffer = fs.readFileSync(filePath);
+  if (archiveMagic === "tar" || extension === ".tar") {
+    const { entries, createdFiles } = extractTarEntries(zipBuffer, outputRoot);
+    if (!createdFiles.length) {
+      throw new Error("\u6ca1\u6709\u4ece TAR \u4e2d\u63d0\u53d6\u5230\u53ef\u7528\u6587\u4ef6\u3002");
+    }
+    const report = writeGeneratedFile(outputRoot, `${sanitizeSegment(path.parse(filePath).name)}-tar-clues.txt`, buildTarClueReport(entries, filePath));
+    return {
+      message: "\u5df2\u89e3\u5305 TAR \u5e76\u5c06\u5185\u5bb9\u7eb3\u5165\u7ee7\u7eed\u5206\u6790\u3002",
+      createdFiles: [report, ...createdFiles],
+    };
+  }
+
   const actionOptions = buildActionOptions(options, filePath);
   let zip = new AdmZip(zipBuffer);
   let createdFiles = [];
@@ -6118,7 +6365,7 @@ function decodeEncodedText(filePath, outputRoot) {
   const decoded = smartDecodeTextContent(buffer);
 
   if (!decoded.length) {
-    throw new Error("\u6ca1\u6709\u627e\u5230\u53ef\u76f4\u63a5\u89e3\u7801\u7684 Base/Hex/XOR/ROT/\u96f6\u5bbd/\u7a7a\u767d/Morse/Polybius/Bacon/Brainfuck/Ook \u7ebf\u7d22\u3002");
+    throw new Error("\u6ca1\u6709\u627e\u5230\u53ef\u76f4\u63a5\u89e3\u7801\u7684 Base/Hex/XOR/ROT/\u6570\u5b57\u5750\u6807/NATO/DNA/\u96f6\u5bbd/\u7a7a\u767d/Morse/Polybius/Bacon/Brainfuck/Ook \u7ebf\u7d22\u3002");
   }
 
   const sections = decoded.map((item, index) => {
@@ -6222,15 +6469,27 @@ function buildBuiltinToolboxReport(filePath) {
     "未发现可直接自动还原的编码层。",
   );
 
-  if (descriptor.badge === "PNG") {
-    const pngText = extractPngTextChunks(buffer);
-    appendReportSection(lines, "zsteg-lite PNG text chunks", pngText.map((item) => `- ${item}`), "未发现 PNG 文本块。");
+  if (["PNG", "BMP"].includes(descriptor.badge)) {
+    const pngText = descriptor.badge === "PNG" ? extractPngTextChunks(buffer) : [];
+    if (descriptor.badge === "PNG") {
+      appendReportSection(lines, "zsteg-lite PNG text chunks", pngText.map((item) => `- ${item}`), "未发现 PNG 文本块。");
+    }
     const lsb = collectPngLSBCandidates(buffer);
     const lsbLines = lsb.slice(0, 12).flatMap((item) => {
       const header = `- ${item.traversal.toUpperCase()} ${item.channel} bit${item.bitPlane} ${item.bitOrder.toUpperCase()}`;
       return [header, ...item.printable.slice(0, 4).map((entry) => `  ${entry}`), ...item.flags.map((entry) => `  ${entry.value}`)];
     });
-    appendReportSection(lines, "zsteg-lite PNG LSB", lsbLines, "未发现常见低位平面可读文本。");
+    appendReportSection(lines, `zsteg-lite ${descriptor.badge} LSB`, lsbLines, "未发现常见低位平面可读文本。");
+  }
+
+  if (descriptor.badge === "GIF") {
+    const gifText = parseGifTextExtensions(buffer);
+    appendReportSection(
+      lines,
+      "GIF extension text",
+      gifText.map((item) => `- ${item.kind}${item.identifier ? ` (${item.identifier})` : ""}: ${item.text}`),
+      "未发现 GIF 注释、应用或纯文本扩展。",
+    );
   }
 
   if (descriptor.family === "network") {
@@ -6427,7 +6686,7 @@ function extractImageViews(filePath, outputRoot) {
   const buffer = fs.readFileSync(filePath);
   const raster = decodeImageRaster(buffer);
   if (!raster) {
-    throw new Error("\u76ee\u524d\u53ea\u652f\u6301 PNG / JPEG \u7684\u901a\u9053\u5bfc\u51fa\u3002");
+    throw new Error("\u76ee\u524d\u53ea\u652f\u6301 PNG / JPEG / BMP \u7684\u901a\u9053\u5bfc\u51fa\u3002");
   }
 
   ensureOutputRoot(outputRoot);
@@ -7389,6 +7648,92 @@ function extractJpegComments(buffer) {
   return dedupeStrings(comments).slice(0, 40);
 }
 
+function readGifSubBlocks(buffer, startOffset) {
+  const chunks = [];
+  let offset = startOffset;
+  while (offset < buffer.length) {
+    const length = buffer[offset];
+    offset += 1;
+    if (length === 0) {
+      break;
+    }
+    if (offset + length > buffer.length) {
+      return { data: Buffer.concat(chunks), nextOffset: buffer.length, truncated: true };
+    }
+    chunks.push(buffer.subarray(offset, offset + length));
+    offset += length;
+  }
+  return { data: Buffer.concat(chunks), nextOffset: offset, truncated: false };
+}
+
+function parseGifTextExtensions(buffer) {
+  if (detectMagic(buffer) !== "gif" || buffer.length < 13) {
+    return [];
+  }
+
+  const results = [];
+  const packed = buffer[10];
+  const globalColorTableSize = packed & 0x80 ? 3 * 2 ** ((packed & 0x07) + 1) : 0;
+  let offset = 13 + globalColorTableSize;
+
+  while (offset < buffer.length && results.length < 40) {
+    const marker = buffer[offset];
+    offset += 1;
+    if (marker === 0x3b) {
+      break;
+    }
+    if (marker === 0x21) {
+      if (offset >= buffer.length) break;
+      const label = buffer[offset];
+      offset += 1;
+
+      if ([0xfe, 0xff, 0x01].includes(label)) {
+        let identifier = "";
+        if (label !== 0xfe) {
+          if (offset >= buffer.length) break;
+          const headerSize = buffer[offset];
+          offset += 1;
+          if (offset + headerSize > buffer.length) break;
+          identifier = decodeBufferAsText(buffer.subarray(offset, offset + headerSize)).trim();
+          offset += headerSize;
+        }
+        const blocks = readGifSubBlocks(buffer, offset);
+        offset = blocks.nextOffset;
+        const text = decodeBufferAsText(blocks.data).trim();
+        if (text || identifier) {
+          results.push({
+            kind: label === 0xfe ? "comment" : label === 0xff ? "application" : "plain-text",
+            identifier,
+            text,
+          });
+        }
+        continue;
+      }
+
+      if (offset >= buffer.length) break;
+      const fixedSize = buffer[offset];
+      offset += 1 + fixedSize;
+      if (offset < buffer.length && buffer[offset] === 0) offset += 1;
+      continue;
+    }
+    if (marker === 0x2c) {
+      if (offset + 9 > buffer.length) break;
+      const imagePacked = buffer[offset + 8];
+      offset += 9;
+      if (imagePacked & 0x80) {
+        offset += 3 * 2 ** ((imagePacked & 0x07) + 1);
+      }
+      if (offset >= buffer.length) break;
+      offset += 1;
+      offset = readGifSubBlocks(buffer, offset).nextOffset;
+      continue;
+    }
+    break;
+  }
+
+  return results;
+}
+
 function getJpegMarkerName(marker) {
   if (marker === 0xda) {
     return "SOS";
@@ -7593,6 +7938,9 @@ function extractImageMetadata(filePath, outputRoot) {
   const comments = strings.filter((value) => /flag|comment|author|software|icc|photoshop|adobe/i.test(value)).slice(0, 40);
   comments.forEach((value) => lines.push(value));
   extractJpegComments(buffer).forEach((value) => lines.push(value));
+  parseGifTextExtensions(buffer).forEach((item) => {
+    lines.push(`GIF ${item.kind}${item.identifier ? ` (${item.identifier})` : ""}: ${item.text}`);
+  });
 
   if (!lines.length) {
     throw new Error("\u6ca1\u6709\u63d0\u53d6\u5230\u660e\u663e\u7684\u56fe\u50cf\u5143\u6570\u636e\u6216\u6ce8\u91ca\u5185\u5bb9\u3002");
@@ -7623,9 +7971,10 @@ function extractPngText(filePath, outputRoot) {
 
 function extractPngLsb(filePath, outputRoot) {
   const buffer = fs.readFileSync(filePath);
+  const format = detectMagic(buffer).toUpperCase() || "IMAGE";
   const candidates = collectPngLSBCandidates(buffer);
   if (!candidates.length) {
-    throw new Error("\u6ca1\u6709\u63d0\u53d6\u5230\u53ef\u7528\u7684 PNG \u4f4e\u4f4d\u5e73\u9762\u6587\u672c\u5019\u9009\u3002");
+    throw new Error(`\u6ca1\u6709\u63d0\u53d6\u5230\u53ef\u7528\u7684 ${format} \u4f4e\u4f4d\u5e73\u9762\u6587\u672c\u5019\u9009\u3002`);
   }
 
   const sections = candidates.flatMap((item) => {
@@ -7635,10 +7984,10 @@ function extractPngLsb(filePath, outputRoot) {
     lines.push("");
     return lines;
   });
-  const generatedName = `${sanitizeSegment(path.parse(filePath).name)}-png-lsb.txt`;
+  const generatedName = `${sanitizeSegment(path.parse(filePath).name)}-${format.toLowerCase()}-lsb.txt`;
   const outPath = writeGeneratedFile(outputRoot, generatedName, `${sections.join("\n")}\n`);
   return {
-    message: "\u5df2\u5bfc\u51fa PNG \u4f4e\u4f4d\u5e73\u9762\u5019\u9009\u6587\u672c\u3002",
+    message: `\u5df2\u5bfc\u51fa ${format} \u4f4e\u4f4d\u5e73\u9762\u5019\u9009\u6587\u672c\u3002`,
     createdFiles: [outPath],
   };
 }

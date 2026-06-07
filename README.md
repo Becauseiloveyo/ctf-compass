@@ -8,9 +8,9 @@ This project is intentionally limited to legitimate CTF training workflows:
 
 - classify challenge types from metadata, notes, and attached artifacts
 - extract likely flag candidates from text, ASCII / UTF-16 strings, recursive encoded content, and CJK codepoint byte projection
-- automatically unpack ZIP and GZIP content and continue recursive analysis
+- automatically unpack ZIP, GZIP, TAR, and TGZ content and continue recursive analysis
 - automatically decode base64, base58, base91, hex, base32, ascii85/Z85, URL-encoded, quoted-printable, UUEncode, binary/decimal byte streams, escaped byte text, A1Z26, NATO phonetic words, DNA 2-bit streams, single-byte XOR, ROT/Caesar, Affine, Rail Fence, Morse, Polybius, Bacon, Brainfuck/Ook, zero-width text, whitespace stego, Unicode tag text, and compressed text layers when they produce useful local results
-- automatically extract solvable image clues such as appended payloads, PNG text chunks, low-bit-plane candidates, and JPEG COM / XMP / APP segment payloads
+- automatically extract solvable image clues such as appended payloads, PNG text chunks, PNG/BMP low-bit-plane candidates, GIF comment/application/plain-text extensions, and JPEG COM / XMP / APP segment payloads
 - automatically decode QR and 1D barcode payloads from local images and export RGB / luminance / edge / JPEG-block visualization views for image-based challenges
 - automatically summarize local traffic captures, extracting HTTP requests, DNS names, TLS SNI, cookies/tokens, and exported HTTP objects
 - automatically extract PDF metadata, XMP packets, readable Flate streams, and OOXML/Office package contents for recursive local analysis
@@ -44,7 +44,7 @@ This project does **not** target real-world systems and should not be used for u
 
 CTF Compass uses a two-layer workflow:
 
-- Built-in analyzers handle deterministic local tasks such as recursive ZIP/GZIP extraction, strings, encoded text layers, PNG text chunks, PNG LSB candidates, QR/barcode detection, basic pcap triage, PDF/Office unpacking, WAV clues, and ELF/PE/APK structure summaries.
+- Built-in analyzers handle deterministic local tasks such as recursive ZIP/GZIP/TAR/TGZ extraction, strings, encoded text layers, PNG text chunks, PNG/BMP LSB candidates, GIF extension text, QR/barcode detection, basic pcap triage, PDF/Office unpacking, WAV clues, and ELF/PE/APK structure summaries.
 - A bundled toolbox report is generated automatically for each root artifact. It mimics the common workflow of `strings`, `binwalk`, `Ciphey`, `zsteg`, `TShark`, `rabin2`, and `exiftool` where a lightweight in-app implementation is practical.
 - External tool adapters run mature local tools when they are installed. Safe scan/extract adapters are executed automatically during solver runs, while heavier decompile/export actions remain available from each artifact card.
 
