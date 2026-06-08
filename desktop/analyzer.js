@@ -4016,6 +4016,94 @@ function parseElfRelocationSection(buffer, sections, section, littleEndian, is64
   };
 }
 
+function collectElfPwnStrings(buffer, sections) {
+  const collected = [];
+  let scannedBytes = 0;
+  const maxScannedBytes = 2 * 1024 * 1024;
+  const usefulSections = new Set([".rodata", ".data", ".data.rel.ro", ".dynstr", ".strtab"]);
+
+  for (const section of sections) {
+    if (!usefulSections.has(section.name) || (section.flags & 4n) !== 0n || scannedBytes >= maxScannedBytes) {
+      continue;
+    }
+    const offset = toSafeNumber(section.offset);
+    const size = toSafeNumber(section.size);
+    if (offset === null || size === null || offset < 0 || size <= 0 || offset + size > buffer.length) {
+      continue;
+    }
+    const scanSize = Math.min(size, maxScannedBytes - scannedBytes);
+    collected.push(...extractAsciiStrings(buffer.subarray(offset, offset + scanSize), 4, 500));
+    scannedBytes += scanSize;
+  }
+
+  const interestingPattern =
+    /(?:\/bin\/(?:sh|bash)|(?:^|\/)flag(?:\.txt)?|choice|option|menu|password|name|size|index|content|input|again|goodbye|welcome|shell|admin|secret|token|error|invalid|%[-+ #0-9$.*hljztL]*(?:p|n|s|x))/i;
+  return dedupeStrings(collected)
+    .filter((value) => value.length <= 240 && interestingPattern.test(value))
+    .slice(0, 120);
+}
+
+function parseElfBuildId(buffer, sections, littleEndian) {
+  const noteSections = sections.filter((section) => section.type === 7 || section.name === ".note.gnu.build-id");
+  const align4 = (value) => (value + 3) & ~3;
+
+  for (const section of noteSections) {
+    const offset = toSafeNumber(section.offset);
+    const size = toSafeNumber(section.size);
+    if (offset === null || size === null || offset < 0 || size <= 0 || offset + size > buffer.length) {
+      continue;
+    }
+    const end = offset + size;
+    let cursor = offset;
+    while (cursor + 12 <= end) {
+      const nameSize = readUIntValue(buffer, cursor, 4, littleEndian);
+      const descriptionSize = readUIntValue(buffer, cursor + 4, 4, littleEndian);
+      const noteType = readUIntValue(buffer, cursor + 8, 4, littleEndian);
+      const nameStart = cursor + 12;
+      const descriptionStart = nameStart + align4(nameSize);
+      const next = descriptionStart + align4(descriptionSize);
+      if (nameSize > 256 || descriptionSize > 4096 || next > end) {
+        break;
+      }
+      const name = buffer.subarray(nameStart, nameStart + nameSize).toString("ascii").replace(/\0/g, "");
+      if (name === "GNU" && noteType === 3 && descriptionSize > 0) {
+        return buffer.subarray(descriptionStart, descriptionStart + descriptionSize).toString("hex");
+      }
+      cursor = next;
+    }
+  }
+  return "";
+}
+
+function collectElfGlibcVersions(buffer) {
+  const sample = buffer.subarray(0, Math.min(buffer.length, 16 * 1024 * 1024));
+  return dedupeStrings(extractAsciiStrings(sample, 7, 12000).filter((value) => /^GLIBC_\d+(?:\.\d+)*$/.test(value))).sort((left, right) =>
+    left.localeCompare(right, undefined, { numeric: true }),
+  );
+}
+
+function getElfRole(type, interpreter, soname) {
+  if (type === 4) {
+    return "core-dump";
+  }
+  if (/^libc(?:-\d+(?:\.\d+)*)?\.so(?:\.6)?$/i.test(soname)) {
+    return "libc-runtime";
+  }
+  if (/^(?:ld-linux|ld-musl|ld-).*\.so/i.test(soname)) {
+    return "dynamic-loader";
+  }
+  if (type === 2) {
+    return "executable";
+  }
+  if (type === 3 && interpreter) {
+    return "pie-executable";
+  }
+  if (type === 3) {
+    return "shared-library";
+  }
+  return "relocatable/object";
+}
+
 function collectElfPwnSurface(buffer, sections, symbolTables, relocations, programHeaders, context) {
   const symbolNames = dedupeStrings([
     ...symbolTables.flatMap((table) => table.namesByIndex || []),
@@ -4042,9 +4130,27 @@ function collectElfPwnSurface(buffer, sections, symbolTables, relocations, progr
     { name: "execve", severity: "high", reason: "process execution primitive" },
     { name: "mprotect", severity: "medium", reason: "memory permission primitive" },
     { name: "malloc", severity: "low", reason: "heap allocation surface" },
+    { name: "calloc", severity: "low", reason: "heap allocation surface" },
+    { name: "realloc", severity: "medium", reason: "heap resize surface" },
     { name: "free", severity: "low", reason: "heap lifetime surface" },
   ];
   const dangerousFunctions = dangerousDefinitions.filter((item) => hasSymbol(item.name));
+  const pwnStrings = collectElfPwnStrings(buffer, sections);
+  const selectSymbols = (names) => names.filter(hasSymbol);
+  const ioProfile = {
+    input: selectSymbols(["gets", "fgets", "scanf", "__isoc99_scanf", "read", "recv", "recvfrom", "getline"]),
+    output: selectSymbols(["puts", "printf", "fprintf", "write", "send", "sendto"]),
+    network: selectSymbols(["socket", "bind", "listen", "accept", "accept4", "connect", "recv", "recvfrom", "send", "sendto"]),
+    heap: selectSymbols(["malloc", "calloc", "realloc", "free"]),
+    process: selectSymbols(["fork", "vfork", "clone", "execve", "system"]),
+    constraints: selectSymbols(["alarm", "setitimer", "seccomp", "prctl", "chroot", "setuid", "setgid"]),
+    setup: selectSymbols(["setvbuf", "setbuf", "signal"]),
+  };
+  ioProfile.mode = ioProfile.network.length ? "network-service" : ioProfile.input.length || ioProfile.output.length ? "stdio/local-process" : "unknown";
+  const formatStringLiterals = pwnStrings.filter((value) => /%[-+ #0-9$.*hljztL]*(?:p|n|s|x)/i.test(value)).slice(0, 20);
+  const shellStrings = pwnStrings.filter((value) => /\/bin\/(?:sh|bash)/i.test(value)).slice(0, 10);
+  const flagPathStrings = pwnStrings.filter((value) => /(?:^|\/)flag(?:\.txt)?/i.test(value)).slice(0, 10);
+  const menuStrings = pwnStrings.filter((value) => /choice|option|menu|size|index|content|again|goodbye/i.test(value)).slice(0, 20);
 
   const gnuStack = programHeaders.find((header) => header.type === 0x6474e551);
   const hasRelro = programHeaders.some((header) => header.type === 0x6474e552);
@@ -4055,6 +4161,21 @@ function collectElfPwnSurface(buffer, sections, symbolTables, relocations, progr
   const fortify = hasSymbolPrefix("__") && normalizedSymbols.some((name) => /^__.+_chk$/.test(name));
   const stripped = !sections.some((section) => section.name === ".symtab");
   const relro = hasRelro ? (context.bindNow ? "full" : "partial") : "none";
+  const allocatedSections = sections.filter((section) => (section.flags & 2n) !== 0n);
+  const describeRegion = (section) => ({
+    name: section.name,
+    address: section.address,
+    size: section.size,
+    permissions: `${(section.flags & 1n) !== 0n ? "w" : "-"}${(section.flags & 2n) !== 0n ? "a" : "-"}${(section.flags & 4n) !== 0n ? "x" : "-"}`,
+  });
+  const memorySurface = {
+    writable: allocatedSections.filter((section) => (section.flags & 1n) !== 0n).map(describeRegion),
+    executable: allocatedSections.filter((section) => (section.flags & 4n) !== 0n).map(describeRegion),
+    rwx: allocatedSections.filter((section) => (section.flags & 1n) !== 0n && (section.flags & 4n) !== 0n).map(describeRegion),
+    staging: allocatedSections
+      .filter((section) => (section.flags & 1n) !== 0n && /^(?:\.bss|\.data|\.data\.rel\.ro|\.got|\.got\.plt|\.dynamic)$/i.test(section.name))
+      .map(describeRegion),
+  };
   const targetSymbols = normalizedSymbols.filter((name) => /^(win|shell|get_shell|spawn_shell|backdoor|secret|give_flag|print_flag)$/i.test(name));
   const hypotheses = [];
   const addHypothesis = (id, priority, title, reason, verify) => {
@@ -4137,6 +4258,86 @@ function collectElfPwnSurface(buffer, sections, symbolTables, relocations, progr
       "Inspect call sites and available argument-control gadgets for an executable-memory path.",
     );
   }
+  if (ioProfile.heap.length >= 2 || menuStrings.length >= 2) {
+    addHypothesis(
+      "heap-state",
+      ioProfile.heap.includes("free") ? "medium" : "low",
+      "heap lifecycle / menu-state audit",
+      `Heap primitives: ${ioProfile.heap.join(", ") || "not imported"}; menu clues: ${menuStrings.slice(0, 4).join(" | ") || "none"}`,
+      "Map allocation, edit, show, and delete operations; verify index, size, lifetime, and double-use behavior.",
+    );
+  }
+  if (formatStringLiterals.length) {
+    addHypothesis(
+      "format-literals",
+      formatStringLiterals.some((value) => /%[-+ #0-9$.*hljztL]*n/i.test(value)) ? "high" : "medium",
+      "format-string literal / leak audit",
+      `Interesting format strings: ${formatStringLiterals.slice(0, 5).join(" | ")}`,
+      "Determine whether these strings are fixed program output or attacker-controlled format arguments.",
+    );
+  }
+  if (shellStrings.length) {
+    addHypothesis(
+      "shell-string",
+      "medium",
+      "existing shell string",
+      `Shell strings: ${shellStrings.join(", ")}`,
+      "Locate references and confirm whether a reachable call can receive the shell-string address.",
+    );
+  }
+  if (ioProfile.constraints.includes("seccomp") || ioProfile.constraints.includes("prctl")) {
+    addHypothesis(
+      "sandbox-constraint",
+      "high",
+      "seccomp / syscall constraint",
+      `Constraint imports: ${ioProfile.constraints.filter((name) => name === "seccomp" || name === "prctl").join(", ")}`,
+      "Recover the allowed syscall policy before choosing shellcode, ORW, or command-execution paths.",
+    );
+  }
+  if (ioProfile.network.length) {
+    addHypothesis(
+      "network-service",
+      "medium",
+      "network-service interaction",
+      `Network primitives: ${ioProfile.network.join(", ")}`,
+      "Reconstruct message framing, connection lifetime, and fork-per-connection behavior before fuzzing.",
+    );
+  }
+  if (memorySurface.rwx.length) {
+    addHypothesis(
+      "rwx-region",
+      "high",
+      "existing RWX region",
+      `RWX sections: ${memorySurface.rwx.map((item) => item.name).join(", ")}`,
+      "Confirm the region is mapped with write and execute permissions at runtime before using it for staged code.",
+    );
+  } else if (memorySurface.staging.length && (hasSymbol("read") || hasSymbol("recv"))) {
+    addHypothesis(
+      "staged-input",
+      "medium",
+      "writable staging region",
+      `Writable candidates: ${memorySurface.staging.map((item) => item.name).join(", ")}`,
+      "Confirm the region's runtime address and available input primitive before using it for a second-stage payload or ROP data.",
+    );
+  }
+  if (context.role === "core-dump") {
+    addHypothesis(
+      "core-dump",
+      "high",
+      "core dump crash-state recovery",
+      "ELF type is CORE",
+      "Match the core with its executable and runtime libraries, then recover the fault address, registers, stack, and mapped files.",
+    );
+  }
+  if (context.role === "libc-runtime" || context.role === "dynamic-loader") {
+    addHypothesis(
+      "runtime-library",
+      "high",
+      "provided runtime matching",
+      `ELF role: ${context.role}; build-id=${context.buildId || "unknown"}`,
+      "Use the provided runtime files together with the challenge executable; do not assume the host system libc or loader.",
+    );
+  }
 
   const gadgets = [];
   const gadgetCounts = new Map();
@@ -4146,6 +4347,7 @@ function collectElfPwnSurface(buffer, sections, symbolTables, relocations, progr
     const registerNames = architecture64
       ? ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi"]
       : ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+    const extendedRegisterNames = ["r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"];
     const addGadget = (label, section, sectionFileOffset, fileIndex, length) => {
       gadgetCounts.set(label, (gadgetCounts.get(label) || 0) + 1);
       if (gadgets.length >= 64) {
@@ -4173,6 +4375,30 @@ function collectElfPwnSurface(buffer, sections, symbolTables, relocations, progr
         }
         const end = fileOffset + size;
         for (let index = fileOffset; index < end; index += 1) {
+          const popChain = [];
+          let popCursor = index;
+          while (popChain.length < 4 && popCursor < end) {
+            if (buffer[popCursor] >= 0x58 && buffer[popCursor] <= 0x5f) {
+              popChain.push(registerNames[buffer[popCursor] - 0x58]);
+              popCursor += 1;
+              continue;
+            }
+            if (
+              architecture64 &&
+              popCursor + 1 < end &&
+              buffer[popCursor] === 0x41 &&
+              buffer[popCursor + 1] >= 0x58 &&
+              buffer[popCursor + 1] <= 0x5f
+            ) {
+              popChain.push(extendedRegisterNames[buffer[popCursor + 1] - 0x58]);
+              popCursor += 2;
+              continue;
+            }
+            break;
+          }
+          if (popChain.length >= 2 && popCursor < end && buffer[popCursor] === 0xc3) {
+            addGadget(`${popChain.map((name) => `pop ${name}`).join("; ")}; ret`, section, fileOffset, index, popCursor - index + 1);
+          }
           if (buffer[index] === 0xc3) {
             addGadget("ret", section, fileOffset, index, 1);
           }
@@ -4188,8 +4414,62 @@ function collectElfPwnSurface(buffer, sections, symbolTables, relocations, progr
           if (index + 2 < end && buffer[index] === 0xcd && buffer[index + 1] === 0x80 && buffer[index + 2] === 0xc3) {
             addGadget("int 0x80; ret", section, fileOffset, index, 3);
           }
+          if (index + 1 < end && buffer[index] === 0x0f && buffer[index + 1] === 0x05) {
+            addGadget("syscall", section, fileOffset, index, 2);
+          }
+          if (index + 1 < end && buffer[index] === 0xcd && buffer[index + 1] === 0x80) {
+            addGadget("int 0x80", section, fileOffset, index, 2);
+          }
+          if (index + 1 < end && buffer[index] === 0xff && buffer[index + 1] === 0xe4) {
+            addGadget(`jmp ${architecture64 ? "rsp" : "esp"}`, section, fileOffset, index, 2);
+          }
+          if (index + 1 < end && buffer[index] === 0xff && buffer[index + 1] === 0xd4) {
+            addGadget(`call ${architecture64 ? "rsp" : "esp"}`, section, fileOffset, index, 2);
+          }
+          if (architecture64 && index + 2 < end && buffer[index] === 0x48 && buffer[index + 1] === 0x94 && buffer[index + 2] === 0xc3) {
+            addGadget("xchg rsp, rax; ret", section, fileOffset, index, 3);
+          }
+          if (
+            architecture64 &&
+            index + 4 < end &&
+            buffer[index] === 0x48 &&
+            buffer[index + 1] === 0x83 &&
+            buffer[index + 2] === 0xc4 &&
+            buffer[index + 4] === 0xc3
+          ) {
+            addGadget(`add rsp, ${buffer[index + 3]}; ret`, section, fileOffset, index, 5);
+          }
         }
       });
+  }
+  const gadgetLabels = Array.from(gadgetCounts.keys());
+  const hasGadget = (pattern) => gadgetLabels.some((label) => pattern.test(label));
+  const gadgetCapabilities = {
+    argumentControl: architecture64
+      ? ["rdi", "rsi", "rdx", "rcx", "r8", "r9"].filter((register) => hasGadget(new RegExp(`(?:^|; )pop ${register}(?:;|$)`)))
+      : registerNames.filter((register) => hasGadget(new RegExp(`(?:^|; )pop ${register}(?:;|$)`))),
+    syscall: hasGadget(/^(?:syscall|int 0x80)(?:; ret)?$/),
+    stackPivot: hasGadget(/^(?:leave; ret|pop (?:rsp|esp); ret|xchg rsp, rax; ret|jmp (?:rsp|esp)|call (?:rsp|esp))$/),
+    stackAdjust: hasGadget(/^add rsp, \d+; ret$/),
+    alignmentRet: gadgetCounts.has("ret"),
+  };
+  if ((ioProfile.constraints.includes("seccomp") || ioProfile.constraints.includes("prctl")) && gadgetCapabilities.syscall) {
+    addHypothesis(
+      "orw-syscall",
+      gadgetCapabilities.argumentControl.length >= 3 ? "high" : "medium",
+      "seccomp-aware ORW / syscall chain",
+      `syscall gadget present; controlled argument registers: ${gadgetCapabilities.argumentControl.join(", ") || "none detected"}`,
+      "Recover the syscall allowlist and confirm gadgets or writable state for open/read/write-style chains.",
+    );
+  }
+  if (gadgetCapabilities.stackPivot) {
+    addHypothesis(
+      "stack-pivot",
+      "medium",
+      "stack pivot / staged ROP",
+      "A short stack-pivot gadget was detected",
+      "Confirm a controlled writable region and the amount of first-stage input before choosing a pivot.",
+    );
   }
 
   return {
@@ -4206,8 +4486,21 @@ function collectElfPwnSurface(buffer, sections, symbolTables, relocations, progr
     },
     dangerousFunctions,
     targetSymbols,
+    ioProfile,
+    interestingStrings: pwnStrings,
+    formatStringLiterals,
+    shellStrings,
+    flagPathStrings,
+    menuStrings,
+    runtime: {
+      role: context.role,
+      buildId: context.buildId,
+      glibcVersions: context.glibcVersions,
+    },
+    memorySurface,
     hypotheses,
     gadgets,
+    gadgetCapabilities,
     gadgetCounts: Array.from(gadgetCounts.entries())
       .map(([label, count]) => ({ label, count }))
       .sort((left, right) => right.count - left.count),
@@ -4403,12 +4696,18 @@ function parseElfBinary(buffer) {
     .filter((section) => section.type === 4 || section.type === 9)
     .map((section) => parseElfRelocationSection(buffer, sections, section, littleEndian, is64, symbolNameMaps))
     .filter(Boolean);
+  const buildId = parseElfBuildId(buffer, sections, littleEndian);
+  const glibcVersions = collectElfGlibcVersions(buffer);
+  const role = getElfRole(type, interpreter, soname);
   const pwnSurface = collectElfPwnSurface(buffer, sections, symbolTables, relocations, programHeaders, {
     type,
     machine,
     interpreter,
     bindNow,
     runpath,
+    role,
+    buildId,
+    glibcVersions,
   });
 
   return {
@@ -4430,6 +4729,9 @@ function parseElfBinary(buffer) {
     runpath,
     soname,
     bindNow,
+    role,
+    buildId,
+    glibcVersions,
     commentPreview,
     symbolTables: symbolTables.map((table) => ({
       name: table.name,
@@ -4448,8 +4750,11 @@ function buildElfSummaryText(fileName, report) {
   lines.push(`format: ${report.format}`);
   lines.push(`endian: ${report.endian}`);
   lines.push(`type: ${report.type}`);
+  lines.push(`role: ${report.role}`);
   lines.push(`machine: ${report.machine}`);
   lines.push(`entry: ${formatHex(report.entry)}`);
+  lines.push(`build-id: ${report.buildId || "unknown"}`);
+  lines.push(`glibc-versions: ${report.glibcVersions.join(", ") || "none detected"}`);
   lines.push("");
   if (report.pwnSurface) {
     const checksec = report.pwnSurface.checksec;
@@ -4528,8 +4833,38 @@ function buildElfSummaryText(fileName, report) {
     });
     lines.push("");
   }
+  if (report.pwnSurface) {
+    const profile = report.pwnSurface.ioProfile;
+    lines.push("# PWN I/O PROFILE");
+    lines.push(`mode: ${profile.mode}`);
+    ["input", "output", "network", "heap", "process", "constraints", "setup"].forEach((group) => {
+      lines.push(`${group}: ${profile[group].join(", ") || "none"}`);
+    });
+    lines.push("");
+  }
+  if (report.pwnSurface && report.pwnSurface.interestingStrings.length) {
+    lines.push("# PWN INTERESTING STRINGS");
+    report.pwnSurface.interestingStrings.forEach((value) => lines.push(value));
+    lines.push("");
+  }
+  if (report.pwnSurface) {
+    const memory = report.pwnSurface.memorySurface;
+    lines.push("# PWN MEMORY SURFACE");
+    lines.push(`writable: ${memory.writable.map((item) => `${item.name}@${formatHex(item.address)}`).join(", ") || "none detected"}`);
+    lines.push(`executable: ${memory.executable.map((item) => `${item.name}@${formatHex(item.address)}`).join(", ") || "none detected"}`);
+    lines.push(`rwx: ${memory.rwx.map((item) => `${item.name}@${formatHex(item.address)}`).join(", ") || "none detected"}`);
+    lines.push(`staging: ${memory.staging.map((item) => `${item.name}@${formatHex(item.address)}`).join(", ") || "none detected"}`);
+    lines.push("");
+  }
   if (report.pwnSurface && report.pwnSurface.gadgetCounts.length) {
     lines.push("# ROP GADGET-LITE");
+    const capabilities = report.pwnSurface.gadgetCapabilities;
+    lines.push(`argument-control: ${capabilities.argumentControl.join(", ") || "none detected"}`);
+    lines.push(`syscall: ${capabilities.syscall ? "yes" : "no"}`);
+    lines.push(`stack-pivot: ${capabilities.stackPivot ? "yes" : "no"}`);
+    lines.push(`stack-adjust: ${capabilities.stackAdjust ? "yes" : "no"}`);
+    lines.push(`alignment-ret: ${capabilities.alignmentRet ? "yes" : "no"}`);
+    lines.push("");
     report.pwnSurface.gadgetCounts.slice(0, 16).forEach((item) => lines.push(`${item.label}: ${item.count}`));
     lines.push("");
     report.pwnSurface.gadgets.slice(0, 32).forEach((item) => {
@@ -5516,7 +5851,6 @@ async function buildArtifactSignals(filePath) {
       });
       artifact.suggestions.push("\u5148\u770b AndroidManifest\u3001\u6743\u9650\u3001DEX \u5b57\u7b26\u4e32\u3001native lib \u548c assets \u8d44\u6e90\u3002");
     } else if (artifact.badge === "ELF" || extension === ".elf" || extension === ".so") {
-      artifact.highlights.push("ELF \u4e8c\u8fdb\u5236\uff0c\u504f\u5411\u9006\u5411\u6216 pwn \u6d41\u7a0b\u3002");
       artifact.keywords.push("elf", "reverse");
       if (elfReport) {
         artifact.highlights.push(`${elfReport.format} ${elfReport.machine} ${elfReport.type} entry ${formatHex(elfReport.entry)}`);
@@ -5535,10 +5869,35 @@ async function buildArtifactSignals(filePath) {
           if (elfReport.pwnSurface.hypotheses.length) {
             artifact.highlights.push(`Pwn \u4f18\u5148\u8def\u5f84\uff1a${elfReport.pwnSurface.hypotheses.slice(0, 3).map((item) => item.title).join(" / ")}`);
           }
+          if (elfReport.pwnSurface.ioProfile.mode !== "unknown") {
+            artifact.highlights.push(
+              `Pwn I/O\uff1a${elfReport.pwnSurface.ioProfile.mode}\uff1binput=${elfReport.pwnSurface.ioProfile.input.slice(0, 4).join("/") || "?"}\uff1bconstraint=${
+                elfReport.pwnSurface.ioProfile.constraints.slice(0, 4).join("/") || "none"
+              }`,
+            );
+          }
+          if (elfReport.pwnSurface.memorySurface.staging.length || elfReport.pwnSurface.memorySurface.rwx.length) {
+            artifact.highlights.push(
+              `Pwn \u5185\u5b58\u533a\uff1astaging=${elfReport.pwnSurface.memorySurface.staging.map((item) => item.name).join("/") || "none"}\uff1bRWX=${
+                elfReport.pwnSurface.memorySurface.rwx.map((item) => item.name).join("/") || "none"
+              }`,
+            );
+          }
           if (elfReport.pwnSurface.gadgetCounts.length) {
             artifact.keywords.push("rop", "gadget");
+            const capabilities = elfReport.pwnSurface.gadgetCapabilities;
+            artifact.highlights.push(
+              `ROP \u80fd\u529b\uff1aargs=${capabilities.argumentControl.join("/") || "none"}\uff1bsyscall=${capabilities.syscall ? "yes" : "no"}\uff1bpivot=${
+                capabilities.stackPivot ? "yes" : "no"
+              }`,
+            );
           }
         }
+        artifact.highlights.push(
+          `ELF \u89d2\u8272\uff1a${elfReport.role}\uff1bbuild-id=${elfReport.buildId ? elfReport.buildId.slice(0, 16) : "unknown"}\uff1bGLIBC=${
+            elfReport.glibcVersions.slice(-3).join("/") || "unknown"
+          }`,
+        );
         if (elfReport.interpreter) {
           artifact.highlights.push(`\u52a8\u6001\u88c5\u8f7d\u5668\uff1a${elfReport.interpreter}`);
         }
@@ -6622,7 +6981,48 @@ function extractBinaryClues(filePath, outputRoot) {
         ]);
         createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-pwn-paths.txt`, `${pathLines.join("\n").trimEnd()}\n`));
       }
+      const profile = elfReport.pwnSurface.ioProfile;
+      const profileLines = [
+        `mode: ${profile.mode}`,
+        ...["input", "output", "network", "heap", "process", "constraints", "setup"].map(
+          (group) => `${group}: ${profile[group].join(", ") || "none"}`,
+        ),
+      ];
+      createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-pwn-io-profile.txt`, `${profileLines.join("\n")}\n`));
+      const runtimeLines = [
+        `role: ${elfReport.role}`,
+        `format: ${elfReport.format}`,
+        `machine: ${elfReport.machine}`,
+        `interpreter: ${elfReport.interpreter || "none"}`,
+        `soname: ${elfReport.soname || "none"}`,
+        `build-id: ${elfReport.buildId || "unknown"}`,
+        `glibc-versions: ${elfReport.glibcVersions.join(", ") || "none detected"}`,
+        ...elfReport.neededLibraries.map((item) => `needed: ${item}`),
+      ];
+      createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-elf-runtime-profile.txt`, `${runtimeLines.join("\n")}\n`));
+      const memory = elfReport.pwnSurface.memorySurface;
+      const memoryLines = [
+        `writable: ${memory.writable.map((item) => `${item.name} ${formatHex(item.address)} ${formatHex(item.size)} ${item.permissions}`).join(", ") || "none detected"}`,
+        `executable: ${memory.executable.map((item) => `${item.name} ${formatHex(item.address)} ${formatHex(item.size)} ${item.permissions}`).join(", ") || "none detected"}`,
+        `rwx: ${memory.rwx.map((item) => `${item.name} ${formatHex(item.address)} ${formatHex(item.size)} ${item.permissions}`).join(", ") || "none detected"}`,
+        `staging: ${memory.staging.map((item) => `${item.name} ${formatHex(item.address)} ${formatHex(item.size)} ${item.permissions}`).join(", ") || "none detected"}`,
+      ];
+      createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-pwn-memory-surface.txt`, `${memoryLines.join("\n")}\n`));
+      if (elfReport.pwnSurface.interestingStrings.length) {
+        createdFiles.push(
+          writeGeneratedFile(outputRoot, `${baseName}-pwn-interesting-strings.txt`, `${elfReport.pwnSurface.interestingStrings.join("\n")}\n`),
+        );
+      }
       if (elfReport.pwnSurface.gadgets.length) {
+        const capabilities = elfReport.pwnSurface.gadgetCapabilities;
+        const capabilityLines = [
+          `argument-control: ${capabilities.argumentControl.join(", ") || "none detected"}`,
+          `syscall: ${capabilities.syscall ? "yes" : "no"}`,
+          `stack-pivot: ${capabilities.stackPivot ? "yes" : "no"}`,
+          `stack-adjust: ${capabilities.stackAdjust ? "yes" : "no"}`,
+          `alignment-ret: ${capabilities.alignmentRet ? "yes" : "no"}`,
+        ];
+        createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-rop-capabilities-lite.txt`, `${capabilityLines.join("\n")}\n`));
         const gadgetLines = elfReport.pwnSurface.gadgets.map(
           (item) => `${formatHex(item.address)} ${item.section}+${formatHex(item.offset)} ${item.label}`,
         );
@@ -6872,7 +7272,10 @@ function buildBuiltinToolboxReport(filePath) {
       "rabin2-lite ELF",
       [
         `- machine: ${elfReport.machine}`,
+        `- role: ${elfReport.role}`,
         `- entry: ${formatHex(elfReport.entry)}`,
+        `- build-id: ${elfReport.buildId || "unknown"}`,
+        `- glibc-versions: ${elfReport.glibcVersions.join(", ") || "none"}`,
         `- sections: ${elfReport.sections.length}`,
         `- symbols: ${elfSymbols.length}`,
         ...(checksec
@@ -6886,7 +7289,23 @@ function buildBuiltinToolboxReport(filePath) {
         ...elfReport.neededLibraries.map((item) => `- needed: ${item}`),
         ...(elfReport.pwnSurface?.dangerousFunctions || []).slice(0, 12).map((item) => `- pwn-surface: ${item.name} ${item.severity} ${item.reason}`),
         ...(elfReport.pwnSurface?.hypotheses || []).slice(0, 8).map((item) => `- pwn-path: [${item.priority}] ${item.title} - ${item.reason}`),
+        ...(elfReport.pwnSurface
+          ? [
+              `- pwn-io-mode: ${elfReport.pwnSurface.ioProfile.mode}`,
+              `- pwn-constraints: ${elfReport.pwnSurface.ioProfile.constraints.join(", ") || "none"}`,
+              `- pwn-staging: ${elfReport.pwnSurface.memorySurface.staging.map((item) => item.name).join(", ") || "none"}`,
+              `- pwn-rwx: ${elfReport.pwnSurface.memorySurface.rwx.map((item) => item.name).join(", ") || "none"}`,
+              ...elfReport.pwnSurface.interestingStrings.slice(0, 12).map((item) => `- pwn-string: ${item}`),
+            ]
+          : []),
         ...(elfReport.pwnSurface?.gadgetCounts || []).slice(0, 8).map((item) => `- gadget: ${item.label} x${item.count}`),
+        ...(elfReport.pwnSurface
+          ? [
+              `- rop-args: ${elfReport.pwnSurface.gadgetCapabilities.argumentControl.join(", ") || "none"}`,
+              `- rop-syscall: ${elfReport.pwnSurface.gadgetCapabilities.syscall ? "yes" : "no"}`,
+              `- rop-stack-pivot: ${elfReport.pwnSurface.gadgetCapabilities.stackPivot ? "yes" : "no"}`,
+            ]
+          : []),
         ...elfSymbols.slice(0, 40).map((item) => `- symbol: ${item}`),
       ],
     );
@@ -8459,7 +8878,12 @@ function shouldAutoRun(actionId, artifact) {
     return artifact.family === "document" && isOfficePackageExtension(artifact.extension) && artifact.depth < MAX_PIPELINE_DEPTH;
   }
   if (actionId === "decode-encoded-text") {
-    return artifact.depth < MAX_PIPELINE_DEPTH && !(artifact.flagCandidates || []).length;
+    const structuredReport =
+      artifact.sourceKind === "generated" &&
+      /(?:-summary|-profile|-clues|-metadata|-comment|-symbols|-relocations|-needed|-surface|-paths|-capabilities|-gadgets|-toolbox)\.txt$/i.test(
+        artifact.name,
+      );
+    return !structuredReport && artifact.depth < MAX_PIPELINE_DEPTH && !(artifact.flagCandidates || []).length;
   }
   if (actionId === "extract-traffic-sessions") {
     return artifact.family === "network" && artifact.depth === 0;

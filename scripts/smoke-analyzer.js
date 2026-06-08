@@ -85,8 +85,13 @@ async function runPwnCase(root, elfPath, expectedFlag) {
   const checksecPath = generatedPaths.find((filePath) => filePath.endsWith("-checksec-lite.txt"));
   const surfacePath = generatedPaths.find((filePath) => filePath.endsWith("-pwn-surface.txt"));
   const pathsPath = generatedPaths.find((filePath) => filePath.endsWith("-pwn-paths.txt"));
+  const ioProfilePath = generatedPaths.find((filePath) => filePath.endsWith("-pwn-io-profile.txt"));
+  const pwnStringsPath = generatedPaths.find((filePath) => filePath.endsWith("-pwn-interesting-strings.txt"));
   const gadgetPath = generatedPaths.find((filePath) => filePath.endsWith("-rop-gadgets-lite.txt"));
-  if (!checksecPath || !surfacePath || !pathsPath || !gadgetPath) {
+  const capabilityPath = generatedPaths.find((filePath) => filePath.endsWith("-rop-capabilities-lite.txt"));
+  const runtimePath = generatedPaths.find((filePath) => filePath.endsWith("-elf-runtime-profile.txt"));
+  const memoryPath = generatedPaths.find((filePath) => filePath.endsWith("-pwn-memory-surface.txt"));
+  if (!checksecPath || !surfacePath || !pathsPath || !ioProfilePath || !pwnStringsPath || !gadgetPath || !capabilityPath || !runtimePath || !memoryPath) {
     throw new Error(`case pwn-elf-static: missing generated pwn reports: ${generatedPaths.join(", ")}`);
   }
   if (!/RELRO: full/.test(fs.readFileSync(checksecPath, "utf8")) || !/gets: critical/.test(fs.readFileSync(surfacePath, "utf8"))) {
@@ -95,8 +100,28 @@ async function runPwnCase(root, elfPath, expectedFlag) {
   if (!/stack overflow \/ ret2libc \/ ROP/.test(fs.readFileSync(pathsPath, "utf8"))) {
     throw new Error("case pwn-elf-static: generated pwn path report is incomplete");
   }
+  const ioProfile = fs.readFileSync(ioProfilePath, "utf8");
+  if (!/mode: network-service/.test(ioProfile) || !/\balarm\b/.test(ioProfile) || !/\bprctl\b/.test(ioProfile) || !/\bseccomp\b/.test(ioProfile)) {
+    throw new Error(`case pwn-elf-static: generated pwn I/O profile is incomplete: ${ioProfile}`);
+  }
+  const pwnStrings = fs.readFileSync(pwnStringsPath, "utf8");
+  if (!/\/bin\/sh/.test(pwnStrings) || !/Choice:/.test(pwnStrings) || !/%p %p %n/.test(pwnStrings)) {
+    throw new Error(`case pwn-elf-static: generated interesting strings report is incomplete: ${pwnStrings}`);
+  }
   if (!/pop rdi; ret/.test(fs.readFileSync(gadgetPath, "utf8"))) {
     throw new Error("case pwn-elf-static: generated gadget report is incomplete");
+  }
+  const capabilities = fs.readFileSync(capabilityPath, "utf8");
+  if (!/argument-control: rdi, rsi, rdx/.test(capabilities) || !/syscall: yes/.test(capabilities) || !/stack-pivot: yes/.test(capabilities)) {
+    throw new Error(`case pwn-elf-static: generated ROP capability report is incomplete: ${capabilities}`);
+  }
+  const runtimeProfile = fs.readFileSync(runtimePath, "utf8");
+  if (!/role: pie-executable/.test(runtimeProfile) || !/build-id: 00112233445566778899aabbccddeeff00112233/.test(runtimeProfile) || !/GLIBC_2.31/.test(runtimeProfile)) {
+    throw new Error(`case pwn-elf-static: generated ELF runtime profile is incomplete: ${runtimeProfile}`);
+  }
+  const memoryProfile = fs.readFileSync(memoryPath, "utf8");
+  if (!/staging: \.dynamic/.test(memoryProfile) || !/executable: \.text/.test(memoryProfile)) {
+    throw new Error(`case pwn-elf-static: generated memory surface report is incomplete: ${memoryProfile}`);
   }
 
   return {
@@ -261,7 +286,23 @@ function align(value, alignment) {
 }
 
 function createPwnElf64(filePath, flag) {
-  const dynstrValues = ["", "libc.so.6", "gets", "printf", "system", "read", "__stack_chk_fail"];
+  const dynstrValues = [
+    "",
+    "libc.so.6",
+    "gets",
+    "printf",
+    "system",
+    "read",
+    "__stack_chk_fail",
+    "socket",
+    "accept",
+    "alarm",
+    "prctl",
+    "seccomp",
+    "malloc",
+    "free",
+    "setvbuf",
+  ];
   const dynstrOffsets = new Map();
   let dynstrLength = 0;
   const dynstrChunks = dynstrValues.map((value) => {
@@ -293,8 +334,14 @@ function createPwnElf64(filePath, flag) {
   dynamic.writeBigUInt64LE(0n, 24);
   dynamic.writeBigUInt64LE(0n, 32);
   dynamic.writeBigUInt64LE(0n, 40);
+  const buildIdNote = Buffer.alloc(36);
+  buildIdNote.writeUInt32LE(4, 0);
+  buildIdNote.writeUInt32LE(20, 4);
+  buildIdNote.writeUInt32LE(3, 8);
+  buildIdNote.write("GNU\0", 12, "ascii");
+  Buffer.from("00112233445566778899aabbccddeeff00112233", "hex").copy(buildIdNote, 16);
 
-  const sectionNames = ["", ".text", ".rodata", ".interp", ".dynstr", ".dynsym", ".rela.plt", ".dynamic", ".note.GNU-stack", ".shstrtab"];
+  const sectionNames = ["", ".text", ".rodata", ".interp", ".dynstr", ".dynsym", ".rela.plt", ".dynamic", ".note.GNU-stack", ".note.gnu.build-id", ".shstrtab"];
   const shstrOffsets = new Map();
   let shstrLength = 0;
   const shstr = Buffer.concat(
@@ -308,14 +355,44 @@ function createPwnElf64(filePath, flag) {
 
   const sections = [
     { name: "", type: 0, flags: 0n, address: 0n, data: Buffer.alloc(0), align: 0, link: 0, info: 0, entrySize: 0 },
-    { name: ".text", type: 1, flags: 6n, address: 0x401000n, data: Buffer.from([0x5f, 0xc3, 0x0f, 0x05, 0xc3, 0xc9, 0xc3, 0xc3]), align: 16, link: 0, info: 0, entrySize: 0 },
-    { name: ".rodata", type: 1, flags: 2n, address: 0x402000n, data: Buffer.from(`${flag}\0`, "ascii"), align: 8, link: 0, info: 0, entrySize: 0 },
+    {
+      name: ".text",
+      type: 1,
+      flags: 6n,
+      address: 0x401000n,
+      data: Buffer.from([
+        0x5f, 0xc3,
+        0x5e, 0x41, 0x5f, 0xc3,
+        0x5a, 0xc3,
+        0x0f, 0x05, 0xc3,
+        0xc9, 0xc3,
+        0x48, 0x94, 0xc3,
+        0x48, 0x83, 0xc4, 0x20, 0xc3,
+        0xc3,
+      ]),
+      align: 16,
+      link: 0,
+      info: 0,
+      entrySize: 0,
+    },
+    {
+      name: ".rodata",
+      type: 1,
+      flags: 2n,
+      address: 0x402000n,
+      data: Buffer.from(`${flag}\0Choice:\0Index:\0Size:\0Content:\0/bin/sh\0leak: %p %p %n\0flag.txt\0GLIBC_2.31\0`, "ascii"),
+      align: 8,
+      link: 0,
+      info: 0,
+      entrySize: 0,
+    },
     { name: ".interp", type: 1, flags: 2n, address: 0x400200n, data: Buffer.from("/lib64/ld-linux-x86-64.so.2\0", "ascii"), align: 1, link: 0, info: 0, entrySize: 0 },
     { name: ".dynstr", type: 3, flags: 2n, address: 0x403000n, data: dynstr, align: 1, link: 0, info: 0, entrySize: 0 },
     { name: ".dynsym", type: 11, flags: 2n, address: 0x404000n, data: dynsym, align: 8, link: 4, info: 1, entrySize: 24 },
     { name: ".rela.plt", type: 4, flags: 2n, address: 0x405000n, data: rela, align: 8, link: 5, info: 1, entrySize: 24 },
     { name: ".dynamic", type: 6, flags: 3n, address: 0x406000n, data: dynamic, align: 8, link: 4, info: 0, entrySize: 16 },
     { name: ".note.GNU-stack", type: 1, flags: 0n, address: 0n, data: Buffer.alloc(0), align: 1, link: 0, info: 0, entrySize: 0 },
+    { name: ".note.gnu.build-id", type: 7, flags: 2n, address: 0x407000n, data: buildIdNote, align: 4, link: 0, info: 0, entrySize: 0 },
     { name: ".shstrtab", type: 3, flags: 0n, address: 0n, data: shstr, align: 1, link: 0, info: 0, entrySize: 0 },
   ];
 
@@ -341,7 +418,7 @@ function createPwnElf64(filePath, flag) {
   buffer.writeUInt16LE(programHeaderCount, 56);
   buffer.writeUInt16LE(64, 58);
   buffer.writeUInt16LE(sections.length, 60);
-  buffer.writeUInt16LE(9, 62);
+  buffer.writeUInt16LE(10, 62);
 
   const writeProgramHeader = (index, type, flags, offset, address, fileSize, memorySize) => {
     const start = 64 + index * 56;

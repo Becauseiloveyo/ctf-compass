@@ -23,6 +23,10 @@
 - Identify architecture, protections, I/O model, memory corruption surface, and intended primitive.
 - Confirm NX, PIE, RELRO, stack canaries, and libc assumptions.
 - Use checksec-lite and the risky-import summary to prioritize likely stack overflow, format-string, ret2libc, ROP, or heap-oriented paths before opening a debugger.
+- Use the I/O profile to distinguish stdio binaries from network services, and treat `alarm`, `fork`, `prctl`, or `seccomp` imports as runtime constraints that must be recovered before selecting a path.
+- Match provided executables, loaders, libc files, and core dumps by architecture, ELF role, GNU Build ID, and GLIBC version instead of using the host runtime by default.
+- Review writable, executable, RWX, and staging sections before selecting direct shellcode, staged input, stack pivot, or ORW paths.
+- Review menu prompts, format literals, shell paths, and flag-file strings as navigation clues; they are not proof of exploitability without confirming references and data flow.
 - Treat short gadget candidates as orientation data only; confirm offsets and runtime mappings inside the provided challenge environment.
 - Build exploit hypotheses only inside the provided challenge runtime.
 
