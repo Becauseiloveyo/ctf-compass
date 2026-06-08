@@ -22,6 +22,8 @@
 
 - Identify architecture, protections, I/O model, memory corruption surface, and intended primitive.
 - Confirm NX, PIE, RELRO, stack canaries, and libc assumptions.
+- Use checksec-lite and the risky-import summary to prioritize likely stack overflow, format-string, ret2libc, ROP, or heap-oriented paths before opening a debugger.
+- Treat short gadget candidates as orientation data only; confirm offsets and runtime mappings inside the provided challenge environment.
 - Build exploit hypotheses only inside the provided challenge runtime.
 
 ## Forensic

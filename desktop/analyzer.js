@@ -237,10 +237,16 @@ const BUNDLED_TOOL_CAPABILITIES = [
     purpose: "离线解析 pcap/pcapng 基础帧、HTTP、DNS、TLS SNI、Cookie/Token 和 HTTP 对象。",
   },
   {
+    id: "pwn-lite",
+    label: "内置 checksec/ROP-lite",
+    replaces: "checksec / ROPgadget subset",
+    purpose: "静态分析 ELF 的 NX、PIE、RELRO、Canary、Fortify、Stripped、风险函数和常见 x86/x64 短 ROP gadget。",
+  },
+  {
     id: "binary-lite",
     label: "内置 rabin2/exif-lite",
     replaces: "rabin2 / exiftool subset",
-    purpose: "解析 ELF/PE/APK/PDF/WAV/JPEG/PNG 的关键结构和元数据线索。",
+    purpose: "解析 ELF/PE/APK/PDF/WAV/JPEG/PNG 的关键结构，并提供 ELF checksec-lite、Pwn 风险函数和短 ROP gadget 线索。",
   },
 ];
 
@@ -4010,6 +4016,204 @@ function parseElfRelocationSection(buffer, sections, section, littleEndian, is64
   };
 }
 
+function collectElfPwnSurface(buffer, sections, symbolTables, relocations, programHeaders, context) {
+  const symbolNames = dedupeStrings([
+    ...symbolTables.flatMap((table) => table.namesByIndex || []),
+    ...relocations.flatMap((entry) => entry.symbols || []),
+  ]).filter(Boolean);
+  const normalizedSymbols = symbolNames.map((name) => name.replace(/@.*$/, ""));
+  const hasSymbol = (name) => normalizedSymbols.includes(name);
+  const hasSymbolPrefix = (prefix) => normalizedSymbols.some((name) => name.startsWith(prefix));
+
+  const dangerousDefinitions = [
+    { name: "gets", severity: "critical", reason: "unbounded line input" },
+    { name: "strcpy", severity: "high", reason: "unbounded string copy" },
+    { name: "strcat", severity: "high", reason: "unbounded string append" },
+    { name: "sprintf", severity: "high", reason: "unbounded formatted write" },
+    { name: "scanf", severity: "medium", reason: "format-controlled input" },
+    { name: "__isoc99_scanf", severity: "medium", reason: "format-controlled input" },
+    { name: "read", severity: "medium", reason: "raw-length input primitive" },
+    { name: "recv", severity: "medium", reason: "network input primitive" },
+    { name: "memcpy", severity: "medium", reason: "length-controlled memory copy" },
+    { name: "printf", severity: "medium", reason: "format-string sink" },
+    { name: "fprintf", severity: "medium", reason: "format-string sink" },
+    { name: "snprintf", severity: "low", reason: "formatted write" },
+    { name: "system", severity: "high", reason: "command execution primitive" },
+    { name: "execve", severity: "high", reason: "process execution primitive" },
+    { name: "mprotect", severity: "medium", reason: "memory permission primitive" },
+    { name: "malloc", severity: "low", reason: "heap allocation surface" },
+    { name: "free", severity: "low", reason: "heap lifetime surface" },
+  ];
+  const dangerousFunctions = dangerousDefinitions.filter((item) => hasSymbol(item.name));
+
+  const gnuStack = programHeaders.find((header) => header.type === 0x6474e551);
+  const hasRelro = programHeaders.some((header) => header.type === 0x6474e552);
+  const nx = gnuStack ? (gnuStack.flags & 1) === 0 : null;
+  const pie = context.type === 3 && Boolean(context.interpreter);
+  const sharedObject = context.type === 3 && !context.interpreter;
+  const canary = hasSymbol("__stack_chk_fail") || hasSymbol("__stack_chk_guard");
+  const fortify = hasSymbolPrefix("__") && normalizedSymbols.some((name) => /^__.+_chk$/.test(name));
+  const stripped = !sections.some((section) => section.name === ".symtab");
+  const relro = hasRelro ? (context.bindNow ? "full" : "partial") : "none";
+  const targetSymbols = normalizedSymbols.filter((name) => /^(win|shell|get_shell|spawn_shell|backdoor|secret|give_flag|print_flag)$/i.test(name));
+  const hypotheses = [];
+  const addHypothesis = (id, priority, title, reason, verify) => {
+    if (!hypotheses.some((item) => item.id === id)) {
+      hypotheses.push({ id, priority, title, reason, verify });
+    }
+  };
+  const stackInputFunctions = ["gets", "strcpy", "strcat", "sprintf", "read", "recv"].filter(hasSymbol);
+  const formatFunctions = ["printf", "fprintf", "sprintf", "snprintf"].filter(hasSymbol);
+
+  if (targetSymbols.length) {
+    addHypothesis(
+      "target-function",
+      "high",
+      "ret2win / target function",
+      `Interesting symbols: ${targetSymbols.slice(0, 8).join(", ")}`,
+      "Confirm the target function's preconditions and whether controlled return flow can reach it.",
+    );
+  }
+  if (stackInputFunctions.length) {
+    addHypothesis(
+      "stack-input",
+      canary ? "medium" : "high",
+      "stack overflow / ret2libc / ROP",
+      `Input or copy primitives: ${stackInputFunctions.join(", ")}; canary=${canary ? "present" : "absent"}`,
+      "Confirm the input bound, crash offset, saved return-address control, and required leaks inside the challenge runtime.",
+    );
+  }
+  if (formatFunctions.length) {
+    addHypothesis(
+      "format-string",
+      "medium",
+      "format-string audit",
+      `Formatted-output primitives: ${formatFunctions.join(", ")}`,
+      "Check whether attacker-controlled data can become the format argument before treating this as exploitable.",
+    );
+  }
+  if (hasSymbol("system") || hasSymbol("execve")) {
+    addHypothesis(
+      "command-primitive",
+      "high",
+      "existing command-execution primitive",
+      `Imported primitive: ${["system", "execve"].filter(hasSymbol).join(", ")}`,
+      "Locate call sites and argument control; do not execute the binary outside the supplied challenge environment.",
+    );
+  }
+  if (relro !== "full") {
+    addHypothesis(
+      "got-overwrite",
+      relro === "none" ? "high" : "medium",
+      "GOT overwrite candidate",
+      `RELRO is ${relro}`,
+      "Confirm a usable arbitrary or controlled write and select a reachable GOT entry.",
+    );
+  }
+  if (nx === false) {
+    addHypothesis(
+      "executable-stack",
+      "high",
+      "direct shellcode candidate",
+      "GNU_STACK is executable",
+      "Confirm stack control and architecture before testing shellcode in the challenge runtime.",
+    );
+  }
+  if (pie === false && !sharedObject) {
+    addHypothesis(
+      "fixed-addresses",
+      "medium",
+      "fixed binary addresses",
+      "PIE is disabled",
+      "Use static code/data addresses only after confirming ASLR and loader behavior in the challenge runtime.",
+    );
+  }
+  if (hasSymbol("mprotect")) {
+    addHypothesis(
+      "mprotect",
+      "medium",
+      "memory-permission pivot",
+      "mprotect is imported",
+      "Inspect call sites and available argument-control gadgets for an executable-memory path.",
+    );
+  }
+
+  const gadgets = [];
+  const gadgetCounts = new Map();
+  const architecture64 = context.machine === 62;
+  const architecture32 = context.machine === 3;
+  if (architecture64 || architecture32) {
+    const registerNames = architecture64
+      ? ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi"]
+      : ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+    const addGadget = (label, section, sectionFileOffset, fileIndex, length) => {
+      gadgetCounts.set(label, (gadgetCounts.get(label) || 0) + 1);
+      if (gadgets.length >= 64) {
+        return;
+      }
+      const sectionAddress = typeof section.address === "bigint" ? section.address : BigInt(section.address || 0);
+      const relativeOffset = fileIndex - sectionFileOffset;
+      gadgets.push({
+        label,
+        section: section.name,
+        offset: relativeOffset,
+        fileOffset: fileIndex,
+        address: sectionAddress + BigInt(relativeOffset),
+        size: length,
+      });
+    };
+
+    sections
+      .filter((section) => (section.flags & 4n) !== 0n)
+      .forEach((section) => {
+        const fileOffset = toSafeNumber(section.offset);
+        const size = toSafeNumber(section.size);
+        if (fileOffset === null || size === null || fileOffset < 0 || fileOffset + size > buffer.length) {
+          return;
+        }
+        const end = fileOffset + size;
+        for (let index = fileOffset; index < end; index += 1) {
+          if (buffer[index] === 0xc3) {
+            addGadget("ret", section, fileOffset, index, 1);
+          }
+          if (index + 1 < end && buffer[index] >= 0x58 && buffer[index] <= 0x5f && buffer[index + 1] === 0xc3) {
+            addGadget(`pop ${registerNames[buffer[index] - 0x58]}; ret`, section, fileOffset, index, 2);
+          }
+          if (index + 1 < end && buffer[index] === 0xc9 && buffer[index + 1] === 0xc3) {
+            addGadget("leave; ret", section, fileOffset, index, 2);
+          }
+          if (index + 2 < end && buffer[index] === 0x0f && buffer[index + 1] === 0x05 && buffer[index + 2] === 0xc3) {
+            addGadget("syscall; ret", section, fileOffset, index, 3);
+          }
+          if (index + 2 < end && buffer[index] === 0xcd && buffer[index + 1] === 0x80 && buffer[index + 2] === 0xc3) {
+            addGadget("int 0x80; ret", section, fileOffset, index, 3);
+          }
+        }
+      });
+  }
+
+  return {
+    checksec: {
+      nx,
+      pie,
+      sharedObject,
+      relro,
+      canary,
+      fortify,
+      stripped,
+      rpath: Boolean(context.runpath),
+      executableStack: gnuStack ? (gnuStack.flags & 1) !== 0 : null,
+    },
+    dangerousFunctions,
+    targetSymbols,
+    hypotheses,
+    gadgets,
+    gadgetCounts: Array.from(gadgetCounts.entries())
+      .map(([label, count]) => ({ label, count }))
+      .sort((left, right) => right.count - left.count),
+  };
+}
+
 function parseElfBinary(buffer) {
   if (detectMagic(buffer) !== "elf" || buffer.length < 52) {
     return null;
@@ -4051,6 +4255,8 @@ function parseElfBinary(buffer) {
       }
       const nameOffset = readWord(offset, 4);
       const sectionType = readWord(offset + 4, 4);
+      const flags = is64 ? readBigUIntValue(buffer, offset + 8, littleEndian) : BigInt(readWord(offset + 8, 4));
+      const address = is64 ? readBigUIntValue(buffer, offset + 16, littleEndian) : BigInt(readWord(offset + 12, 4));
       const fileOffset = is64 ? readBigUIntValue(buffer, offset + 24, littleEndian) : BigInt(readWord(offset + 16, 4));
       const size = is64 ? readBigUIntValue(buffer, offset + 32, littleEndian) : BigInt(readWord(offset + 20, 4));
       const entrySize = is64 ? readBigUIntValue(buffer, offset + 56, littleEndian) : BigInt(readWord(offset + 36, 4));
@@ -4060,6 +4266,8 @@ function parseElfBinary(buffer) {
         index,
         nameOffset,
         type: sectionType,
+        flags,
+        address,
         offset: fileOffset,
         size,
         entrySize,
@@ -4088,6 +4296,7 @@ function parseElfBinary(buffer) {
   });
 
   let interpreter = "";
+  const programHeaders = [];
   const programHeaderStart = toSafeNumber(programHeaderOffset);
   if (programHeaderStart !== null && programHeaderSize >= (is64 ? 56 : 32)) {
     const maxHeaders = Math.min(programHeaderCount, 64);
@@ -4097,14 +4306,24 @@ function parseElfBinary(buffer) {
         break;
       }
       const programType = readWord(offset, 4);
+      const flags = readWord(offset + (is64 ? 4 : 24), 4);
+      const fileOffset = is64 ? toSafeNumber(readBigUIntValue(buffer, offset + 8, littleEndian)) : readWord(offset + 4, 4);
+      const virtualAddress = is64 ? readBigUIntValue(buffer, offset + 16, littleEndian) : BigInt(readWord(offset + 8, 4));
+      const fileSize = is64 ? toSafeNumber(readBigUIntValue(buffer, offset + 32, littleEndian)) : readWord(offset + 16, 4);
+      const memorySize = is64 ? readBigUIntValue(buffer, offset + 40, littleEndian) : BigInt(readWord(offset + 20, 4));
+      programHeaders.push({
+        type: programType,
+        flags,
+        offset: fileOffset,
+        virtualAddress,
+        fileSize,
+        memorySize,
+      });
       if (programType !== 3) {
         continue;
       }
-      const fileOffset = is64 ? toSafeNumber(readBigUIntValue(buffer, offset + 8, littleEndian)) : readWord(offset + 4, 4);
-      const fileSize = is64 ? toSafeNumber(readBigUIntValue(buffer, offset + 32, littleEndian)) : readWord(offset + 16, 4);
       if (fileOffset !== null && fileSize !== null && fileOffset + fileSize <= buffer.length) {
         interpreter = readCString(buffer, fileOffset, Math.min(fileSize, 256));
-        break;
       }
     }
   }
@@ -4114,6 +4333,7 @@ function parseElfBinary(buffer) {
   const neededLibraries = [];
   let runpath = "";
   let soname = "";
+  let bindNow = false;
   if (dynamicSection && dynstrSection) {
     const dynamicOffset = toSafeNumber(dynamicSection.offset);
     const dynamicSize = toSafeNumber(dynamicSection.size);
@@ -4134,6 +4354,9 @@ function parseElfBinary(buffer) {
         const value = is64 ? readBigUIntValue(buffer, offset + 8, littleEndian) : BigInt(readWord(offset + 4, 4));
         if (tag === 0n) {
           break;
+        }
+        if (tag === 24n || (tag === 30n && (value & 8n) !== 0n) || (tag === 0x6ffffffbn && (value & 1n) !== 0n)) {
+          bindNow = true;
         }
         const stringOffset = toSafeNumber(value);
         if (stringOffset === null || stringOffset >= dynstr.length) {
@@ -4180,6 +4403,13 @@ function parseElfBinary(buffer) {
     .filter((section) => section.type === 4 || section.type === 9)
     .map((section) => parseElfRelocationSection(buffer, sections, section, littleEndian, is64, symbolNameMaps))
     .filter(Boolean);
+  const pwnSurface = collectElfPwnSurface(buffer, sections, symbolTables, relocations, programHeaders, {
+    type,
+    machine,
+    interpreter,
+    bindNow,
+    runpath,
+  });
 
   return {
     format: is64 ? "ELF64" : "ELF32",
@@ -4191,12 +4421,15 @@ function parseElfBinary(buffer) {
     sections: sections.slice(0, 64).map((section) => ({
       name: section.name,
       type: section.type,
+      flags: section.flags,
+      address: section.address,
       offset: section.offset,
       size: section.size,
     })),
     neededLibraries: dedupeStrings(neededLibraries).slice(0, 24),
     runpath,
     soname,
+    bindNow,
     commentPreview,
     symbolTables: symbolTables.map((table) => ({
       name: table.name,
@@ -4206,6 +4439,7 @@ function parseElfBinary(buffer) {
       objects: table.objects,
     })),
     relocations,
+    pwnSurface,
   };
 }
 
@@ -4217,6 +4451,18 @@ function buildElfSummaryText(fileName, report) {
   lines.push(`machine: ${report.machine}`);
   lines.push(`entry: ${formatHex(report.entry)}`);
   lines.push("");
+  if (report.pwnSurface) {
+    const checksec = report.pwnSurface.checksec;
+    lines.push("# CHECKSEC-LITE");
+    lines.push(`RELRO: ${checksec.relro}`);
+    lines.push(`NX: ${checksec.nx === null ? "unknown" : checksec.nx ? "enabled" : "disabled"}`);
+    lines.push(`PIE: ${checksec.pie ? "enabled" : checksec.sharedObject ? "shared-object" : "disabled"}`);
+    lines.push(`Canary: ${checksec.canary ? "found" : "not found"}`);
+    lines.push(`Fortify: ${checksec.fortify ? "found" : "not found"}`);
+    lines.push(`Stripped: ${checksec.stripped ? "yes" : "no"}`);
+    lines.push(`RPATH/RUNPATH: ${checksec.rpath ? "present" : "none"}`);
+    lines.push("");
+  }
   if (report.interpreter) {
     lines.push("# INTERPRETER");
     lines.push(report.interpreter);
@@ -4267,6 +4513,29 @@ function buildElfSummaryText(fileName, report) {
       }
       lines.push("");
     });
+  }
+  if (report.pwnSurface && report.pwnSurface.dangerousFunctions.length) {
+    lines.push("# PWN SURFACE");
+    report.pwnSurface.dangerousFunctions.forEach((item) => lines.push(`${item.name}: ${item.severity} - ${item.reason}`));
+    lines.push("");
+  }
+  if (report.pwnSurface && report.pwnSurface.hypotheses.length) {
+    lines.push("# PWN PATHS");
+    report.pwnSurface.hypotheses.forEach((item) => {
+      lines.push(`[${item.priority}] ${item.title}`);
+      lines.push(`reason: ${item.reason}`);
+      lines.push(`verify: ${item.verify}`);
+    });
+    lines.push("");
+  }
+  if (report.pwnSurface && report.pwnSurface.gadgetCounts.length) {
+    lines.push("# ROP GADGET-LITE");
+    report.pwnSurface.gadgetCounts.slice(0, 16).forEach((item) => lines.push(`${item.label}: ${item.count}`));
+    lines.push("");
+    report.pwnSurface.gadgets.slice(0, 32).forEach((item) => {
+      lines.push(`${formatHex(item.address)} ${item.section}+${formatHex(item.offset)} ${item.label}`);
+    });
+    lines.push("");
   }
   if (report.sections.length) {
     lines.push("# SECTIONS");
@@ -5251,6 +5520,25 @@ async function buildArtifactSignals(filePath) {
       artifact.keywords.push("elf", "reverse");
       if (elfReport) {
         artifact.highlights.push(`${elfReport.format} ${elfReport.machine} ${elfReport.type} entry ${formatHex(elfReport.entry)}`);
+        if (elfReport.pwnSurface) {
+          const checksec = elfReport.pwnSurface.checksec;
+          artifact.highlights.push(
+            `checksec-lite: RELRO=${checksec.relro} NX=${checksec.nx === null ? "?" : checksec.nx ? "on" : "off"} PIE=${
+              checksec.pie ? "on" : checksec.sharedObject ? "so" : "off"
+            } Canary=${checksec.canary ? "yes" : "no"}`,
+          );
+          artifact.keywords.push("pwn", "checksec");
+          if (elfReport.pwnSurface.dangerousFunctions.length) {
+            artifact.highlights.push(`Pwn \u98ce\u9669\u51fd\u6570\uff1a${elfReport.pwnSurface.dangerousFunctions.slice(0, 5).map((item) => item.name).join(" / ")}`);
+            artifact.keywords.push("overflow", "format string", "libc");
+          }
+          if (elfReport.pwnSurface.hypotheses.length) {
+            artifact.highlights.push(`Pwn \u4f18\u5148\u8def\u5f84\uff1a${elfReport.pwnSurface.hypotheses.slice(0, 3).map((item) => item.title).join(" / ")}`);
+          }
+          if (elfReport.pwnSurface.gadgetCounts.length) {
+            artifact.keywords.push("rop", "gadget");
+          }
+        }
         if (elfReport.interpreter) {
           artifact.highlights.push(`\u52a8\u6001\u88c5\u8f7d\u5668\uff1a${elfReport.interpreter}`);
         }
@@ -5270,7 +5558,7 @@ async function buildArtifactSignals(filePath) {
         id: "extract-strings",
         label: "\u5bfc\u51fa strings",
       });
-      artifact.suggestions.push("\u5148\u770b ELF \u5934\u3001.interp\u3001.dynamic\u3001\u4f9d\u8d56 so \u548c\u53ef\u7591 section\u3002");
+      artifact.suggestions.push("\u5148\u770b checksec\u3001.interp/.dynamic\u3001libc \u4f9d\u8d56\u3001\u98ce\u9669\u5bfc\u5165\u51fd\u6570\u548c\u77ed ROP gadget\u3002");
     } else if (artifact.badge === "PE" || [".exe", ".dll"].includes(extension)) {
       artifact.highlights.push("PE \u4e8c\u8fdb\u5236\uff0c\u53ef\u4ece section\u3001imports \u548c\u5b50\u7cfb\u7edf\u5207\u5165\u3002");
       artifact.keywords.push("pe", "windows", "reverse");
@@ -5502,6 +5790,9 @@ function classifyChallenge(payload, artifacts) {
     if (artifact.family === "binary") {
       scores.reverse += 2;
       scores.pwn += artifact.badge === "ELF" ? 1 : 0;
+      if (artifact.keywords.some((keyword) => ["pwn", "checksec", "overflow", "format string", "rop", "gadget"].includes(keyword))) {
+        scores.pwn += 3;
+      }
     }
     if (artifact.family === "text" && artifact.keywords.includes("base64")) {
       scores.crypto += 1;
@@ -6305,8 +6596,41 @@ function extractBinaryClues(filePath, outputRoot) {
       });
       createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-elf-relocations.txt`, `${relocationLines.join("\n")}\n`));
     }
+    if (elfReport.pwnSurface) {
+      const checksec = elfReport.pwnSurface.checksec;
+      const checksecLines = [
+        `RELRO: ${checksec.relro}`,
+        `NX: ${checksec.nx === null ? "unknown" : checksec.nx ? "enabled" : "disabled"}`,
+        `PIE: ${checksec.pie ? "enabled" : checksec.sharedObject ? "shared-object" : "disabled"}`,
+        `Canary: ${checksec.canary ? "found" : "not found"}`,
+        `Fortify: ${checksec.fortify ? "found" : "not found"}`,
+        `Stripped: ${checksec.stripped ? "yes" : "no"}`,
+        `RPATH/RUNPATH: ${checksec.rpath ? "present" : "none"}`,
+      ];
+      createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-checksec-lite.txt`, `${checksecLines.join("\n")}\n`));
+
+      if (elfReport.pwnSurface.dangerousFunctions.length) {
+        const surfaceLines = elfReport.pwnSurface.dangerousFunctions.map((item) => `${item.name}: ${item.severity} - ${item.reason}`);
+        createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-pwn-surface.txt`, `${surfaceLines.join("\n")}\n`));
+      }
+      if (elfReport.pwnSurface.hypotheses.length) {
+        const pathLines = elfReport.pwnSurface.hypotheses.flatMap((item) => [
+          `[${item.priority}] ${item.title}`,
+          `reason: ${item.reason}`,
+          `verify: ${item.verify}`,
+          "",
+        ]);
+        createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-pwn-paths.txt`, `${pathLines.join("\n").trimEnd()}\n`));
+      }
+      if (elfReport.pwnSurface.gadgets.length) {
+        const gadgetLines = elfReport.pwnSurface.gadgets.map(
+          (item) => `${formatHex(item.address)} ${item.section}+${formatHex(item.offset)} ${item.label}`,
+        );
+        createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-rop-gadgets-lite.txt`, `${gadgetLines.join("\n")}\n`));
+      }
+    }
     return {
-      message: "\u5df2\u63d0\u53d6 ELF \u5934\u3001section\u3001\u52a8\u6001\u4f9d\u8d56\u3001\u7b26\u53f7\u4e0e\u91cd\u5b9a\u4f4d\u7ebf\u7d22\u3002",
+      message: "\u5df2\u63d0\u53d6 ELF \u5934\u3001checksec\u3001Pwn \u98ce\u9669\u51fd\u6570\u3001ROP gadget\u3001\u52a8\u6001\u4f9d\u8d56\u3001\u7b26\u53f7\u4e0e\u91cd\u5b9a\u4f4d\u7ebf\u7d22\u3002",
       createdFiles: dedupeStrings(createdFiles),
     };
   }
@@ -6542,6 +6866,7 @@ function buildBuiltinToolboxReport(filePath) {
   const elfReport = descriptor.badge === "ELF" ? parseElfBinary(buffer) : null;
   if (elfReport) {
     const elfSymbols = dedupeStrings(elfReport.symbolTables.flatMap((table) => [...table.functions, ...table.globals, ...table.objects])).slice(0, 80);
+    const checksec = elfReport.pwnSurface?.checksec;
     appendReportSection(
       lines,
       "rabin2-lite ELF",
@@ -6550,7 +6875,18 @@ function buildBuiltinToolboxReport(filePath) {
         `- entry: ${formatHex(elfReport.entry)}`,
         `- sections: ${elfReport.sections.length}`,
         `- symbols: ${elfSymbols.length}`,
+        ...(checksec
+          ? [
+              `- RELRO: ${checksec.relro}`,
+              `- NX: ${checksec.nx === null ? "unknown" : checksec.nx ? "enabled" : "disabled"}`,
+              `- PIE: ${checksec.pie ? "enabled" : checksec.sharedObject ? "shared-object" : "disabled"}`,
+              `- Canary: ${checksec.canary ? "found" : "not found"}`,
+            ]
+          : []),
         ...elfReport.neededLibraries.map((item) => `- needed: ${item}`),
+        ...(elfReport.pwnSurface?.dangerousFunctions || []).slice(0, 12).map((item) => `- pwn-surface: ${item.name} ${item.severity} ${item.reason}`),
+        ...(elfReport.pwnSurface?.hypotheses || []).slice(0, 8).map((item) => `- pwn-path: [${item.priority}] ${item.title} - ${item.reason}`),
+        ...(elfReport.pwnSurface?.gadgetCounts || []).slice(0, 8).map((item) => `- gadget: ${item.label} x${item.count}`),
         ...elfSymbols.slice(0, 40).map((item) => `- symbol: ${item}`),
       ],
     );
@@ -6578,7 +6914,7 @@ function runBuiltinToolbox(filePath, outputRoot) {
   const report = buildBuiltinToolboxReport(filePath);
   const outPath = writeGeneratedFile(outputRoot, `${sanitizeSegment(path.parse(filePath).name)}-builtin-toolbox.txt`, report);
   return {
-    message: "已运行内置工具箱：strings-lite、binwalk-lite、ciphey-lite、zsteg/tshark/rabin2/exif 子集。",
+    message: "已运行内置工具箱：strings-lite、binwalk-lite、ciphey-lite、zsteg/tshark/checksec/ROP/rabin2/exif 子集。",
     createdFiles: [outPath],
   };
 }

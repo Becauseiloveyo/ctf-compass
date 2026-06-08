@@ -15,7 +15,7 @@ This project is intentionally limited to legitimate CTF training workflows:
 - automatically summarize local traffic captures, extracting HTTP requests, DNS names, TLS SNI, cookies/tokens, and exported HTTP objects
 - automatically extract PDF metadata, XMP packets, readable Flate streams, and OOXML/Office package contents for recursive local analysis
 - automatically inspect WAV metadata, PCM LSB candidates, tone / morse hints, and waveform / spectrogram views for audio-based local challenges
-- automatically inspect ELF / PE / APK attachments, extracting headers, sections, imports / exports, symbol / relocation summaries, interpreter / shared-library hints, manifest strings, DEX method indexes, Android string-pool resources, and unpacked package contents for recursive local analysis
+- automatically inspect ELF / PE / APK attachments, extracting headers, sections, imports / exports, symbol / relocation summaries, interpreter / shared-library hints, ELF checksec-lite protections, risky Pwn imports, short x86/x64 ROP gadget candidates, manifest strings, DEX method indexes, Android string-pool resources, and unpacked package contents for recursive local analysis
 - run a bundled local toolbox on each root artifact, covering strings-lite, binwalk-lite, ciphey-lite, zsteg-lite, tshark-lite, and rabin2/exif-lite style checks without external downloads
 - detect local professional CTF tools on PATH and auto-run safe adapters instead of showing placeholder guidance
 - run installed tool adapters for ExifTool, binwalk, zsteg, TShark, Ciphey, rabin2, jadx, and apktool, then import generated output back into the recursive solver
@@ -36,7 +36,7 @@ This project does **not** target real-world systems and should not be used for u
 - `crypto`: simple encoded content discovery, category hints, and workflow guidance
 - `web`: challenge metadata and traffic-based session/auth clue routing
 - `reverse`: ELF / PE / APK structure extraction, strings/import/export/symbol triage, and flow hints
-- `pwn`: ELF-oriented routing with loader/shared-library clues and protection-oriented next steps
+- `pwn`: ELF checksec-lite, risky import/function surface, prioritized ret2win/overflow/format-string/GOT/ROP hypotheses, short x86/x64 ROP gadget candidates, loader/shared-library clues, and protection-oriented next steps
 - `forensic`: pcap/pcapng session extraction, archive recursion, document extraction, and hidden-artifact oriented workflow hints
 - `misc`: image/stego and mixed-artifact triage with local auto-processing where deterministic
 
@@ -44,7 +44,7 @@ This project does **not** target real-world systems and should not be used for u
 
 CTF Compass uses a two-layer workflow:
 
-- Built-in analyzers handle deterministic local tasks such as recursive ZIP/GZIP/TAR/TGZ extraction, strings, encoded text layers, PNG text chunks, PNG/BMP LSB candidates, GIF extension text, QR/barcode detection, basic pcap triage, PDF/Office unpacking, WAV clues, and ELF/PE/APK structure summaries.
+- Built-in analyzers handle deterministic local tasks such as recursive ZIP/GZIP/TAR/TGZ extraction, strings, encoded text layers, PNG text chunks, PNG/BMP LSB candidates, GIF extension text, QR/barcode detection, basic pcap triage, PDF/Office unpacking, WAV clues, ELF checksec/Pwn surface/gadget triage, and ELF/PE/APK structure summaries.
 - A bundled toolbox report is generated automatically for each root artifact. It mimics the common workflow of `strings`, `binwalk`, `Ciphey`, `zsteg`, `TShark`, `rabin2`, and `exiftool` where a lightweight in-app implementation is practical.
 - External tool adapters run mature local tools when they are installed. Safe scan/extract adapters are executed automatically during solver runs, while heavier decompile/export actions remain available from each artifact card.
 

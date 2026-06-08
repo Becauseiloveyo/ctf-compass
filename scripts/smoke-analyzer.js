@@ -49,6 +49,65 @@ async function runCase(root, name, payload, expectedFlag) {
   };
 }
 
+async function runPwnCase(root, elfPath, expectedFlag) {
+  const outputRoot = path.join(root, "pwn-elf-static-out");
+  const result = await analyzeChallenge(
+    {
+      title: "synthetic pwn ELF smoke",
+      description: "Validate checksec-lite, risky imports, and short ROP gadget detection.",
+      tags: ["pwn", "elf", "rop"],
+      artifacts: [elfPath],
+    },
+    outputRoot,
+  );
+  const flags = collectFlags(result);
+  if (!flags.includes(expectedFlag)) {
+    throw new Error(`case pwn-elf-static: expected ${expectedFlag}, got ${flags.join(", ") || "no flags"}`);
+  }
+  if (result.pipelineErrors && result.pipelineErrors.length) {
+    throw new Error(`case pwn-elf-static: unexpected pipeline errors: ${JSON.stringify(result.pipelineErrors, null, 2)}`);
+  }
+  if (result.classification?.id !== "pwn") {
+    throw new Error(`case pwn-elf-static: expected pwn classification, got ${result.classification?.id || "unknown"}`);
+  }
+
+  const elfArtifact = result.artifacts.find((artifact) => artifact.path === elfPath);
+  const highlightText = (elfArtifact?.highlights || []).join("\n");
+  if (!/checksec-lite: RELRO=full NX=on PIE=on Canary=yes/.test(highlightText)) {
+    throw new Error(`case pwn-elf-static: missing expected checksec highlight: ${highlightText}`);
+  }
+  const keywordText = (elfArtifact?.keywords || []).join(" ");
+  if (!/gets/.test(highlightText) || !/\brop\b/.test(keywordText) || !/\bgadget\b/.test(keywordText)) {
+    throw new Error(`case pwn-elf-static: missing risky function highlight or gadget keywords: ${highlightText}\n${keywordText}`);
+  }
+
+  const generatedPaths = result.pipelineLog.flatMap((entry) => entry.createdArtifacts.map((artifact) => artifact.path));
+  const checksecPath = generatedPaths.find((filePath) => filePath.endsWith("-checksec-lite.txt"));
+  const surfacePath = generatedPaths.find((filePath) => filePath.endsWith("-pwn-surface.txt"));
+  const pathsPath = generatedPaths.find((filePath) => filePath.endsWith("-pwn-paths.txt"));
+  const gadgetPath = generatedPaths.find((filePath) => filePath.endsWith("-rop-gadgets-lite.txt"));
+  if (!checksecPath || !surfacePath || !pathsPath || !gadgetPath) {
+    throw new Error(`case pwn-elf-static: missing generated pwn reports: ${generatedPaths.join(", ")}`);
+  }
+  if (!/RELRO: full/.test(fs.readFileSync(checksecPath, "utf8")) || !/gets: critical/.test(fs.readFileSync(surfacePath, "utf8"))) {
+    throw new Error("case pwn-elf-static: generated checksec or pwn surface report is incomplete");
+  }
+  if (!/stack overflow \/ ret2libc \/ ROP/.test(fs.readFileSync(pathsPath, "utf8"))) {
+    throw new Error("case pwn-elf-static: generated pwn path report is incomplete");
+  }
+  if (!/pop rdi; ret/.test(fs.readFileSync(gadgetPath, "utf8"))) {
+    throw new Error("case pwn-elf-static: generated gadget report is incomplete");
+  }
+
+  return {
+    name: "pwn-elf-static",
+    status: result.solver?.status,
+    primaryFlag: result.solver?.primaryFlag?.value,
+    actionsRun: result.solver?.actionsRun,
+    artifacts: result.challenge?.artifactCount,
+  };
+}
+
 function markZipAsPseudoEncrypted(zipPath) {
   const buffer = fs.readFileSync(zipPath);
   let offset = 0;
@@ -195,6 +254,129 @@ function createGifSplitComment(gifPath, chunks) {
   fs.mkdirSync(path.dirname(gifPath), { recursive: true });
   fs.writeFileSync(gifPath, Buffer.concat([header, logicalScreen, ...commentParts]));
   return gifPath;
+}
+
+function align(value, alignment) {
+  return Math.ceil(value / alignment) * alignment;
+}
+
+function createPwnElf64(filePath, flag) {
+  const dynstrValues = ["", "libc.so.6", "gets", "printf", "system", "read", "__stack_chk_fail"];
+  const dynstrOffsets = new Map();
+  let dynstrLength = 0;
+  const dynstrChunks = dynstrValues.map((value) => {
+    dynstrOffsets.set(value, dynstrLength);
+    const chunk = Buffer.from(`${value}\0`, "ascii");
+    dynstrLength += chunk.length;
+    return chunk;
+  });
+  const dynstr = Buffer.concat(dynstrChunks);
+
+  const dynsym = Buffer.alloc(dynstrValues.length * 24);
+  dynstrValues.slice(1).forEach((name, index) => {
+    const offset = (index + 1) * 24;
+    dynsym.writeUInt32LE(dynstrOffsets.get(name), offset);
+    dynsym[offset + 4] = 0x12;
+  });
+
+  const rela = Buffer.alloc((dynstrValues.length - 1) * 24);
+  dynstrValues.slice(1).forEach((_name, index) => {
+    const offset = index * 24;
+    rela.writeBigUInt64LE(BigInt(0x601000 + index * 8), offset);
+    rela.writeBigUInt64LE((BigInt(index + 1) << 32n) | 7n, offset + 8);
+  });
+
+  const dynamic = Buffer.alloc(48);
+  dynamic.writeBigUInt64LE(1n, 0);
+  dynamic.writeBigUInt64LE(BigInt(dynstrOffsets.get("libc.so.6")), 8);
+  dynamic.writeBigUInt64LE(24n, 16);
+  dynamic.writeBigUInt64LE(0n, 24);
+  dynamic.writeBigUInt64LE(0n, 32);
+  dynamic.writeBigUInt64LE(0n, 40);
+
+  const sectionNames = ["", ".text", ".rodata", ".interp", ".dynstr", ".dynsym", ".rela.plt", ".dynamic", ".note.GNU-stack", ".shstrtab"];
+  const shstrOffsets = new Map();
+  let shstrLength = 0;
+  const shstr = Buffer.concat(
+    sectionNames.map((name) => {
+      shstrOffsets.set(name, shstrLength);
+      const chunk = Buffer.from(`${name}\0`, "ascii");
+      shstrLength += chunk.length;
+      return chunk;
+    }),
+  );
+
+  const sections = [
+    { name: "", type: 0, flags: 0n, address: 0n, data: Buffer.alloc(0), align: 0, link: 0, info: 0, entrySize: 0 },
+    { name: ".text", type: 1, flags: 6n, address: 0x401000n, data: Buffer.from([0x5f, 0xc3, 0x0f, 0x05, 0xc3, 0xc9, 0xc3, 0xc3]), align: 16, link: 0, info: 0, entrySize: 0 },
+    { name: ".rodata", type: 1, flags: 2n, address: 0x402000n, data: Buffer.from(`${flag}\0`, "ascii"), align: 8, link: 0, info: 0, entrySize: 0 },
+    { name: ".interp", type: 1, flags: 2n, address: 0x400200n, data: Buffer.from("/lib64/ld-linux-x86-64.so.2\0", "ascii"), align: 1, link: 0, info: 0, entrySize: 0 },
+    { name: ".dynstr", type: 3, flags: 2n, address: 0x403000n, data: dynstr, align: 1, link: 0, info: 0, entrySize: 0 },
+    { name: ".dynsym", type: 11, flags: 2n, address: 0x404000n, data: dynsym, align: 8, link: 4, info: 1, entrySize: 24 },
+    { name: ".rela.plt", type: 4, flags: 2n, address: 0x405000n, data: rela, align: 8, link: 5, info: 1, entrySize: 24 },
+    { name: ".dynamic", type: 6, flags: 3n, address: 0x406000n, data: dynamic, align: 8, link: 4, info: 0, entrySize: 16 },
+    { name: ".note.GNU-stack", type: 1, flags: 0n, address: 0n, data: Buffer.alloc(0), align: 1, link: 0, info: 0, entrySize: 0 },
+    { name: ".shstrtab", type: 3, flags: 0n, address: 0n, data: shstr, align: 1, link: 0, info: 0, entrySize: 0 },
+  ];
+
+  const programHeaderCount = 3;
+  let cursor = align(64 + programHeaderCount * 56, 0x10);
+  sections.slice(1).forEach((section) => {
+    cursor = align(cursor, Math.max(1, section.align));
+    section.offset = cursor;
+    cursor += section.data.length;
+  });
+  const sectionHeaderOffset = align(cursor, 0x10);
+  const buffer = Buffer.alloc(sectionHeaderOffset + sections.length * 64);
+
+  buffer.set([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0], 0);
+  buffer.writeUInt16LE(3, 16);
+  buffer.writeUInt16LE(62, 18);
+  buffer.writeUInt32LE(1, 20);
+  buffer.writeBigUInt64LE(0x401000n, 24);
+  buffer.writeBigUInt64LE(64n, 32);
+  buffer.writeBigUInt64LE(BigInt(sectionHeaderOffset), 40);
+  buffer.writeUInt16LE(64, 52);
+  buffer.writeUInt16LE(56, 54);
+  buffer.writeUInt16LE(programHeaderCount, 56);
+  buffer.writeUInt16LE(64, 58);
+  buffer.writeUInt16LE(sections.length, 60);
+  buffer.writeUInt16LE(9, 62);
+
+  const writeProgramHeader = (index, type, flags, offset, address, fileSize, memorySize) => {
+    const start = 64 + index * 56;
+    buffer.writeUInt32LE(type, start);
+    buffer.writeUInt32LE(flags, start + 4);
+    buffer.writeBigUInt64LE(BigInt(offset), start + 8);
+    buffer.writeBigUInt64LE(BigInt(address), start + 16);
+    buffer.writeBigUInt64LE(BigInt(address), start + 24);
+    buffer.writeBigUInt64LE(BigInt(fileSize), start + 32);
+    buffer.writeBigUInt64LE(BigInt(memorySize), start + 40);
+    buffer.writeBigUInt64LE(8n, start + 48);
+  };
+  const interp = sections[3];
+  writeProgramHeader(0, 3, 4, interp.offset, interp.address, interp.data.length, interp.data.length);
+  writeProgramHeader(1, 0x6474e551, 6, 0, 0, 0, 0);
+  writeProgramHeader(2, 0x6474e552, 4, sections[7].offset, sections[7].address, sections[7].data.length, sections[7].data.length);
+
+  sections.slice(1).forEach((section) => section.data.copy(buffer, section.offset));
+  sections.forEach((section, index) => {
+    const start = sectionHeaderOffset + index * 64;
+    buffer.writeUInt32LE(shstrOffsets.get(section.name) || 0, start);
+    buffer.writeUInt32LE(section.type, start + 4);
+    buffer.writeBigUInt64LE(section.flags, start + 8);
+    buffer.writeBigUInt64LE(section.address, start + 16);
+    buffer.writeBigUInt64LE(BigInt(section.offset || 0), start + 24);
+    buffer.writeBigUInt64LE(BigInt(section.data.length), start + 32);
+    buffer.writeUInt32LE(section.link, start + 40);
+    buffer.writeUInt32LE(section.info, start + 44);
+    buffer.writeBigUInt64LE(BigInt(section.align || 0), start + 48);
+    buffer.writeBigUInt64LE(BigInt(section.entrySize || 0), start + 56);
+  });
+
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, buffer);
+  return filePath;
 }
 
 function createBrainfuckPrint(text) {
@@ -357,6 +539,10 @@ async function main() {
       directFlag,
     ),
   );
+
+  const pwnFlag = "flag{pwn_static_smoke}";
+  const pwnElfPath = createPwnElf64(path.join(root, "input", "pwn-smoke.elf"), pwnFlag);
+  results.push(await runPwnCase(root, pwnElfPath, pwnFlag));
 
   const zipCommentFlag = "flag{zip_comment_smoke}";
   const zipCommentPath = createZipWithComment(path.join(root, "input", "comment.zip"), zipCommentFlag);
