@@ -49,6 +49,27 @@ async function runCase(root, name, payload, expectedFlag) {
   };
 }
 
+async function runNoFlagCase(root, name, payload) {
+  const outputRoot = path.join(root, `${name}-out`);
+  const result = await analyzeChallenge(payload, outputRoot);
+  const flags = collectFlags(result);
+
+  if (flags.length || result.solver?.status === "solved") {
+    throw new Error(`case ${name}: expected no trusted flags, got ${flags.join(", ") || result.solver?.status}`);
+  }
+  if (result.pipelineErrors && result.pipelineErrors.length) {
+    throw new Error(`case ${name}: unexpected pipeline errors: ${JSON.stringify(result.pipelineErrors, null, 2)}`);
+  }
+
+  return {
+    name,
+    status: result.solver?.status,
+    primaryFlag: result.solver?.primaryFlag?.value,
+    actionsRun: result.solver?.actionsRun,
+    artifacts: result.challenge?.artifactCount,
+  };
+}
+
 async function runPwnCase(root, elfPath, expectedFlag) {
   const outputRoot = path.join(root, "pwn-elf-static-out");
   const result = await analyzeChallenge(
@@ -279,6 +300,49 @@ function createGifSplitComment(gifPath, chunks) {
   fs.mkdirSync(path.dirname(gifPath), { recursive: true });
   fs.writeFileSync(gifPath, Buffer.concat([header, logicalScreen, ...commentParts]));
   return gifPath;
+}
+
+function createGifDescriptorBits(gifPath, text) {
+  const values = Array.from(Buffer.from(text, "utf8")).flatMap((byte) => [
+    (byte >> 6) & 0x03,
+    (byte >> 4) & 0x03,
+    (byte >> 2) & 0x03,
+    byte & 0x03,
+  ]);
+  const header = Buffer.from("GIF89a", "ascii");
+  const logicalScreen = Buffer.from([0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]);
+  const frames = values.map((value) =>
+    Buffer.from([
+      0x2c,
+      0x00, 0x00, 0x00, 0x00,
+      0x01, 0x00, 0x01, 0x00,
+      value << 4,
+      0x02,
+      0x02, 0x44, 0x01,
+      0x00,
+    ]),
+  );
+  fs.mkdirSync(path.dirname(gifPath), { recursive: true });
+  fs.writeFileSync(gifPath, Buffer.concat([header, logicalScreen, ...frames, Buffer.from([0x3b])]));
+  return gifPath;
+}
+
+function createMp4HiddenTrack(mp4Path, flag) {
+  const box = (type, payload) => {
+    const data = Buffer.isBuffer(payload) ? payload : Buffer.from(payload || "", "utf8");
+    const result = Buffer.alloc(8 + data.length);
+    result.writeUInt32BE(result.length, 0);
+    result.write(type, 4, 4, "ascii");
+    data.copy(result, 8);
+    return result;
+  };
+  const ftyp = box("ftyp", Buffer.from("isom\0\0\2\0isomiso2", "binary"));
+  const mdat = box("mdat", Buffer.from("video-smoke", "ascii"));
+  const moov = box("moov", box("mvhd", Buffer.alloc(24)));
+  const hiddenTrack = box("free", Buffer.from(`hidden-track ${flag}`, "utf8"));
+  fs.mkdirSync(path.dirname(mp4Path), { recursive: true });
+  fs.writeFileSync(mp4Path, Buffer.concat([ftyp, mdat, moov, hiddenTrack]));
+  return mp4Path;
 }
 
 function align(value, alignment) {
@@ -617,6 +681,15 @@ async function main() {
     ),
   );
 
+  const placeholderPath = writeText(path.join(root, "input", "placeholder-flag.txt"), "uoftctf{FAKEFLAG}\n");
+  results.push(
+    await runNoFlagCase(root, "placeholder-flag-filter", {
+      title: "placeholder flag filter smoke",
+      description: "Distribution placeholders must not become direct or transformed flag candidates.",
+      artifacts: [placeholderPath],
+    }),
+  );
+
   const pwnFlag = "flag{pwn_static_smoke}";
   const pwnElfPath = createPwnElf64(path.join(root, "input", "pwn-smoke.elf"), pwnFlag);
   results.push(await runPwnCase(root, pwnElfPath, pwnFlag));
@@ -693,6 +766,36 @@ async function main() {
         artifacts: [gifPath],
       },
       gifFlag,
+    ),
+  );
+
+  const gifDescriptorFlag = "flag{gif_descriptor_bits_smoke}";
+  const gifDescriptorPath = createGifDescriptorBits(path.join(root, "input", "descriptor-bits.gif"), gifDescriptorFlag);
+  results.push(
+    await runCase(
+      root,
+      "gif-descriptor-bits",
+      {
+        title: "gif descriptor bitstream smoke",
+        description: "GIF image descriptor packed bits should be reconstructed into bytes.",
+        artifacts: [gifDescriptorPath],
+      },
+      gifDescriptorFlag,
+    ),
+  );
+
+  const mp4Flag = "flag{mp4_hidden_track_smoke}";
+  const mp4Path = createMp4HiddenTrack(path.join(root, "input", "hidden-track.mp4"), mp4Flag);
+  results.push(
+    await runCase(
+      root,
+      "mp4-hidden-track",
+      {
+        title: "mp4 hidden track smoke",
+        description: "A trailing free box after moov should be identified and repaired as a track.",
+        artifacts: [mp4Path],
+      },
+      mp4Flag,
     ),
   );
 

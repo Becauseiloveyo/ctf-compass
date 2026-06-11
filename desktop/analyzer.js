@@ -21,6 +21,7 @@ const MAX_TRAFFIC_FRAMES = 12000;
 const MAX_HTTP_OBJECTS = 24;
 const MAX_HTTP_BODY_BYTES = 512 * 1024;
 const MAX_AUDIO_BYTES = 12 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 64 * 1024 * 1024;
 const MAX_AUDIO_SAMPLES = 600000;
 const MAX_AUDIO_PREVIEW_SAMPLES = 180000;
 const MAX_AUDIO_ANALYSIS_SAMPLES = 320000;
@@ -143,6 +144,7 @@ const COPY = {
     text: "\u6587\u672c",
     image: "\u56fe\u50cf",
     audio: "\u97f3\u9891",
+    video: "\u89c6\u9891",
     network: "\u6d41\u91cf",
     archive: "\u538b\u7f29\u5305",
     binary: "\u4e8c\u8fdb\u5236",
@@ -256,7 +258,25 @@ const CATEGORY_RULES = {
   reverse: ["binary", "elf", "pe32", "exe", "dll", "ghidra", "ida", "strings", "disasm", "symbol", "apk", "java"],
   pwn: ["overflow", "heap", "rop", "libc", "canary", "format string", "uaf", "fastbin", "tcache", "stack smashing"],
   forensic: ["pcap", "pcapng", "traffic", "dns", "http", "memory", "disk", "metadata", "artifact", "timeline", "capture"],
-  misc: ["stego", "steganography", "puzzle", "logic", "encoding", "qr", "audio", "image", "hidden", "zip"],
+  misc: [
+    "stego",
+    "steganography",
+    "puzzle",
+    "logic",
+    "encoding",
+    "qr",
+    "audio",
+    "image",
+    "hidden",
+    "zip",
+    "video",
+    "mp4",
+    "container",
+    "track",
+    "chunk",
+    "stco",
+    "co64",
+  ],
 };
 
 const KNOWN_FLAG_PREFIX = /\b(?:flag|ctf|key|answer|picoCTF|moectf|actf|hitcon|sekai|balsn|uiuctf|n1ctf)\{/i;
@@ -1816,6 +1836,9 @@ function detectMagic(buffer) {
   if (buffer.length >= 6 && ["GIF87a", "GIF89a"].includes(buffer.subarray(0, 6).toString("ascii"))) {
     return "gif";
   }
+  if (buffer.length >= 12 && buffer.subarray(4, 8).toString("ascii") === "ftyp") {
+    return "mp4";
+  }
   if (buffer.length >= 2 && buffer.subarray(0, 2).toString("ascii") === "BM") {
     return "bmp";
   }
@@ -1917,6 +1940,9 @@ function detectFamily(filePath, sample) {
   if (magic === "wav" || [".wav", ".mp3", ".flac", ".ogg", ".m4a"].includes(extension)) {
     return { family: "audio", badge: magic ? magic.toUpperCase() : extension.slice(1).toUpperCase() || "AUDIO" };
   }
+  if (magic === "mp4" || [".mp4", ".mov", ".m4v", ".3gp"].includes(extension)) {
+    return { family: "video", badge: magic ? magic.toUpperCase() : extension.slice(1).toUpperCase() || "VIDEO" };
+  }
   if (["pcap", "pcapng"].includes(magic) || [".pcap", ".pcapng", ".cap"].includes(extension)) {
     return { family: "network", badge: magic.toUpperCase() || extension.slice(1).toUpperCase() || "PCAP" };
   }
@@ -1935,6 +1961,12 @@ function detectFamily(filePath, sample) {
   return { family: "unknown", badge: extension.slice(1).toUpperCase() || "FILE" };
 }
 
+function containsPlaceholderFlag(text) {
+  return /(?:fake|dummy|placeholder|example|sample|test)[-_ ]?flag|flag[-_ ]?(?:fake|dummy|placeholder|example|sample|test)/i.test(
+    String(text || ""),
+  );
+}
+
 function findFlagCandidates(text, source) {
   const candidates = [];
   const patterns = [
@@ -1947,6 +1979,12 @@ function findFlagCandidates(text, source) {
     for (const match of text.matchAll(pattern)) {
       const value = match[0].trim();
       if (/^flag\s+(?:candidate|candidates|value|values|source|format|result|results)\b/i.test(value)) {
+        continue;
+      }
+      if (containsPlaceholderFlag(value)) {
+        continue;
+      }
+      if (/^NPF_\{[0-9a-f-]{32,40}\}$/i.test(value) || /^[a-z0-9_]{2,16}\{[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\}$/i.test(value)) {
         continue;
       }
       candidates.push({
@@ -5459,6 +5497,8 @@ async function buildArtifactSignals(filePath) {
       ? MAX_TEXT_BYTES
       : [".wav", ".mp3", ".flac", ".ogg", ".m4a"].includes(extension)
         ? MAX_AUDIO_BYTES
+      : [".mp4", ".mov", ".m4v", ".3gp"].includes(extension)
+        ? MAX_VIDEO_BYTES
       : [".pcap", ".pcapng", ".cap"].includes(extension)
         ? MAX_TRAFFIC_BYTES
         : MAX_SAMPLE_BYTES;
@@ -5494,7 +5534,8 @@ async function buildArtifactSignals(filePath) {
 
   const encodedSegments = findEncodedSegments(searchableText);
   const decodedSegments = decodeInterestingSegments(encodedSegments);
-  const smartDecoded = artifact.family === "text" || artifact.family === "document" ? smartDecodeTextContent(buffer) : [];
+  const smartDecoded =
+    (artifact.family === "text" || artifact.family === "document") && !containsPlaceholderFlag(searchableText) ? smartDecodeTextContent(buffer) : [];
   const directFlags = findFlagCandidates(searchableText, artifact.name);
   const decodedFlags = decodedSegments.flatMap((item) => findFlagCandidates(item.value, `${artifact.name} (${item.type})`));
   const smartFlags = smartDecoded.flatMap((item) => findFlagCandidates(item.value, `${artifact.name} (${item.label})`));
@@ -5508,6 +5549,11 @@ async function buildArtifactSignals(filePath) {
   if ((artifact.family === "archive" && artifact.badge === "ZIP") || isOfficePackageExtension(extension) || artifact.badge === "APK") {
     embeddedPayloads = embeddedPayloads.filter((item) => item.id !== "zip");
   }
+  if (artifact.family === "network") {
+    // Packet payloads regularly contain coincidental file signatures. Protocol and
+    // HTTP-object extraction provide a more reliable boundary-aware route.
+    embeddedPayloads = [];
+  }
   artifact.embeddedPayloads = embeddedPayloads;
   const trafficSummary = artifact.family === "network" ? analyzeTrafficBuffer(buffer) : null;
   const pdfReport = artifact.badge === "PDF" ? analyzePdfBuffer(buffer) : null;
@@ -5520,6 +5566,7 @@ async function buildArtifactSignals(filePath) {
   let wavInfo = null;
   let audioLSB = [];
   let audioSignal = null;
+  let mp4Report = null;
   if (artifact.family === "image") {
     try {
       imageRaster = decodeImageRaster(buffer);
@@ -5540,6 +5587,20 @@ async function buildArtifactSignals(filePath) {
       wavInfo = null;
       audioLSB = [];
       audioSignal = null;
+    }
+  }
+  if (artifact.family === "video" && artifact.badge === "MP4") {
+    try {
+      mp4Report = analyzeMp4Buffer(buffer);
+      const lastBoxEnd = mp4Report?.topLevel.at(-1)?.end || 0;
+      if (lastBoxEnd) {
+        // Media payloads frequently contain coincidental magic bytes. Only treat data
+        // after the final valid top-level box as an appended file.
+        embeddedPayloads = embeddedPayloads.filter((item) => item.offset >= lastBoxEnd);
+        artifact.embeddedPayloads = embeddedPayloads;
+      }
+    } catch (_error) {
+      mp4Report = null;
     }
   }
   if (artifact.family === "binary") {
@@ -5597,6 +5658,7 @@ async function buildArtifactSignals(filePath) {
     }
     if (artifact.badge === "GIF") {
       const gifExtensions = parseGifTextExtensions(buffer);
+      const descriptorStreams = collectGifDescriptorBitstreams(buffer);
       artifact.keywords.push("image", "gif");
       artifact.actions.push({
         id: "extract-image-metadata",
@@ -5609,6 +5671,19 @@ async function buildArtifactSignals(filePath) {
         );
         artifact.flagCandidates = dedupeStrings(
           artifact.flagCandidates.map((item) => `${item.value}@@${item.source}`).concat(gifFlags.map((item) => `${item.value}@@${item.source}`)),
+        ).map((entry) => {
+          const [value, source] = entry.split("@@");
+          return { value, source };
+        });
+      }
+      if (descriptorStreams.length) {
+        artifact.highlights.push(`GIF \u56fe\u50cf\u63cf\u8ff0\u7b26\u4f4d\u6d41\u547d\u4e2d ${descriptorStreams.length} \u7ec4\u5019\u9009\u3002`);
+        artifact.keywords.push("stego", "descriptor bits");
+        const descriptorFlags = descriptorStreams.flatMap((item) => item.flags);
+        artifact.flagCandidates = dedupeStrings(
+          artifact.flagCandidates
+            .map((item) => `${item.value}@@${item.source}`)
+            .concat(descriptorFlags.map((item) => `${item.value}@@${item.source}`)),
         ).map((entry) => {
           const [value, source] = entry.split("@@");
           return { value, source };
@@ -5802,6 +5877,20 @@ async function buildArtifactSignals(filePath) {
       id: "extract-strings",
       label: "\u5bfc\u51fa strings",
     });
+  } else if (artifact.family === "video") {
+    artifact.summary = "\u89c6\u9891\u5bb9\u5668\u9644\u4ef6\uff0c\u9002\u5408\u68c0\u67e5 box \u7ed3\u6784\u3001track\u3001chunk offset\u3001free box \u548c\u5c3e\u90e8\u6570\u636e\u3002";
+    artifact.keywords.push("video", "mp4", "container", "forensic", "misc");
+    artifact.actions.push({
+      id: "extract-mp4-clues",
+      label: "\u5206\u6790\u5e76\u4fee\u590d MP4 \u7ed3\u6784",
+    });
+    if (mp4Report) {
+      artifact.highlights.push(`MP4 \u9876\u5c42 box ${mp4Report.topLevel.length} \u4e2a\uff0cchunk table ${mp4Report.chunkTables.length} \u4e2a\u3002`);
+      if (mp4Report.anomalies.length) {
+        artifact.highlights.push(`MP4 \u7ed3\u6784\u5f02\u5e38 ${mp4Report.anomalies.length} \u9879\uff0c\u53ef\u81ea\u52a8\u4fee\u590d\u3002`);
+        artifact.keywords.push("hidden track", "stco", "repair");
+      }
+    }
   } else if (artifact.family === "archive") {
     artifact.summary = "\u538b\u7f29\u5305\u7c7b\u9644\u4ef6\uff0c\u5e38\u89c1\u7ebf\u7d22\u662f\u5d4c\u5957\u6587\u4ef6\u3001\u8bc4\u8bba\u3001\u989d\u5916\u76ee\u5f55\u6216\u5bc6\u7801\u63d0\u793a\u3002";
     artifact.keywords.push("archive", artifact.badge.toLowerCase());
@@ -6131,7 +6220,7 @@ function classifyChallenge(payload, artifacts) {
 
   for (const artifact of artifacts) {
     if (artifact.family === "network") {
-      scores.forensic += 3;
+      scores.forensic += 12;
       scores.web += 1;
     }
     if (artifact.family === "audio") {
@@ -6140,6 +6229,10 @@ function classifyChallenge(payload, artifacts) {
     }
     if (artifact.family === "image") {
       scores.misc += 2;
+      scores.forensic += 1;
+    }
+    if (artifact.family === "video") {
+      scores.misc += 4;
       scores.forensic += 1;
     }
     if (artifact.family === "archive") {
@@ -6255,6 +6348,15 @@ function scoreFlagCandidate(candidate) {
   }
   if (/metadata|strings|lsb|png|jpeg|http|dns|ciphey|zsteg|binwalk|text|payload/i.test(source)) {
     score += 0.04;
+  }
+  if (/gif|descriptor|frame|mp4|track|chunk/i.test(source)) {
+    score += 0.04;
+  }
+  if (/(?:fake|dummy|placeholder|example|sample|test)[-_ ]?flag|flag[-_ ]?(?:fake|dummy|placeholder|example|sample|test)/i.test(value)) {
+    score -= 0.48;
+  }
+  if (/^NPF_\{[0-9a-f-]{32,40}\}$/i.test(value) || /^[a-z0-9_]{2,16}\{[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\}$/i.test(value)) {
+    score -= 0.42;
   }
   if (value.length > 180 || /\s{2,}/.test(value)) {
     score -= 0.18;
@@ -6445,7 +6547,7 @@ function buildSolverResult(artifacts, flagCandidates, pipelineLog, pipelineError
   const installedToolCount = (toolStatus?.installed || []).length;
   const nextActions = [];
 
-  if (primaryFlag) {
+  if (primaryFlag && primaryFlag.score >= 0.5) {
     nextActions.push("验证候选 flag 的来源文件和格式，确认是否可直接提交。");
     if (rankedCandidates.length > 1) {
       nextActions.push("存在多个候选值时，优先选择格式更完整、来源更直接的结果。");
@@ -6482,8 +6584,8 @@ function buildSolverResult(artifacts, flagCandidates, pipelineLog, pipelineError
         ? `已执行 ${pipelineLog.length} 个本地动作并递归扫描 ${artifacts.length} 个文件，但没有抽取到可提交 flag。`
         : "当前输入不足或缺少必要工具，暂时无法继续自动求解。",
     primaryFlag: null,
-    candidates: [],
-    confidence: status === "partial" ? 0.46 : 0.28,
+    candidates: rankedCandidates,
+    confidence: primaryFlag ? primaryFlag.score : status === "partial" ? 0.46 : 0.28,
     actionsRun: pipelineLog.length,
     artifactCount: artifacts.length,
     missingTools,
@@ -7185,7 +7287,7 @@ function buildBuiltinToolboxReport(filePath) {
   const directFlags = findFlagCandidates(text, `${fileName} (built-in strings)`);
   appendReportSection(lines, "flag hits", directFlags.map((item) => `- ${item.value} (${item.source})`), "未直接命中 flag 样式。");
 
-  const decoded = smartDecodeTextContent(Buffer.from(text, "utf8"));
+  const decoded = containsPlaceholderFlag(text) ? [] : smartDecodeTextContent(Buffer.from(text, "utf8"));
   appendReportSection(
     lines,
     "ciphey-lite decode attempts",
@@ -7208,11 +7310,34 @@ function buildBuiltinToolboxReport(filePath) {
 
   if (descriptor.badge === "GIF") {
     const gifText = parseGifTextExtensions(buffer);
+    const descriptorBits = collectGifDescriptorBitstreams(buffer);
     appendReportSection(
       lines,
       "GIF extension text",
-      gifText.map((item) => `- ${item.kind}${item.identifier ? ` (${item.identifier})` : ""}: ${item.text}`),
+      [
+        ...gifText.map((item) => `- ${item.kind}${item.identifier ? ` (${item.identifier})` : ""}: ${item.text}`),
+        ...descriptorBits.flatMap((item) => [
+          `- ${item.label} frames=${item.frameCount}`,
+          ...item.flags.map((flag) => `- flag: ${flag.value}`),
+          ...item.printable.slice(0, 8).map((value) => `- text: ${value}`),
+        ]),
+      ],
       "未发现 GIF 注释、应用或纯文本扩展。",
+    );
+  }
+  if (descriptor.badge === "MP4") {
+    const report = analyzeMp4Buffer(buffer);
+    appendReportSection(
+      lines,
+      "MP4 box-lite",
+      report
+        ? [
+            ...report.topLevel.map((box) => `- box: ${box.type} offset=${box.offset} size=${box.size}`),
+            ...report.chunkTables.map((table) => `- ${table.type}: entries=${table.count} unsorted=${table.unsorted}`),
+            ...report.anomalies.map((item) => `- anomaly: ${item}`),
+          ]
+        : [],
+      "未解析到 MP4 box 结构。",
     );
   }
 
@@ -8489,6 +8614,201 @@ function parseGifTextExtensions(buffer) {
   return results;
 }
 
+function collectGifDescriptorBitstreams(buffer) {
+  if (detectMagic(buffer) !== "gif" || buffer.length < 13) {
+    return [];
+  }
+
+  const streams = [0, 2, 4, 6].map((shift) => ({ shift, values: [] }));
+  const globalPacked = buffer[10];
+  const globalColorTableSize = globalPacked & 0x80 ? 3 * 2 ** ((globalPacked & 0x07) + 1) : 0;
+  let offset = 13 + globalColorTableSize;
+  let frameCount = 0;
+
+  while (offset < buffer.length && frameCount < 200000) {
+    const marker = buffer[offset];
+    offset += 1;
+    if (marker === 0x3b) {
+      break;
+    }
+    if (marker === 0x21) {
+      if (offset >= buffer.length) break;
+      offset += 1;
+      if (offset >= buffer.length) break;
+      const fixedSize = buffer[offset];
+      offset += 1 + fixedSize;
+      offset = readGifSubBlocks(buffer, offset).nextOffset;
+      continue;
+    }
+    if (marker !== 0x2c || offset + 9 > buffer.length) {
+      break;
+    }
+
+    const imagePacked = buffer[offset + 8];
+    streams.forEach((stream) => stream.values.push((imagePacked >> stream.shift) & 0x03));
+    frameCount += 1;
+    offset += 9;
+    if (imagePacked & 0x80) {
+      offset += 3 * 2 ** ((imagePacked & 0x07) + 1);
+    }
+    if (offset >= buffer.length) break;
+    offset += 1;
+    offset = readGifSubBlocks(buffer, offset).nextOffset;
+  }
+
+  const results = [];
+  streams.forEach((stream) => {
+    if (stream.values.length < 16) {
+      return;
+    }
+    ["msb", "lsb"].forEach((order) => {
+      const bytes = [];
+      for (let index = 0; index + 3 < stream.values.length; index += 4) {
+        const values = stream.values.slice(index, index + 4);
+        const byte =
+          order === "msb"
+            ? (values[0] << 6) | (values[1] << 4) | (values[2] << 2) | values[3]
+            : values[0] | (values[1] << 2) | (values[2] << 4) | (values[3] << 6);
+        bytes.push(byte);
+      }
+      const decodedBuffer = Buffer.from(bytes);
+      const text = decodedBuffer.toString("utf8").replace(/\0/g, "").trim();
+      const flags = findFlagCandidates(text, `GIF descriptor bits shift${stream.shift} ${order}`);
+      const printable = extractPrintableSegments(decodedBuffer.toString("latin1"), 6, 40);
+      if (flags.length || printable.length) {
+        results.push({
+          label: `descriptor-bits-shift${stream.shift}-${order}`,
+          frameCount,
+          text,
+          printable,
+          flags,
+        });
+      }
+    });
+  });
+  return results.slice(0, 12);
+}
+
+function readMp4BoxHeader(buffer, offset, limit = buffer.length) {
+  if (offset < 0 || offset + 8 > limit) {
+    return null;
+  }
+  let size = buffer.readUInt32BE(offset);
+  const type = buffer.subarray(offset + 4, offset + 8).toString("ascii");
+  let headerSize = 8;
+  if (size === 1) {
+    if (offset + 16 > limit) return null;
+    const largeSize = buffer.readBigUInt64BE(offset + 8);
+    if (largeSize > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+    size = Number(largeSize);
+    headerSize = 16;
+  } else if (size === 0) {
+    size = limit - offset;
+  }
+  if (size < headerSize || offset + size > limit || !/^[\x20-\x7e]{4}$/.test(type)) {
+    return null;
+  }
+  return { offset, size, type, headerSize, end: offset + size };
+}
+
+function analyzeMp4Buffer(buffer) {
+  if (detectMagic(buffer) !== "mp4") {
+    return null;
+  }
+  const topLevel = [];
+  let offset = 0;
+  while (offset + 8 <= buffer.length && topLevel.length < 256) {
+    const box = readMp4BoxHeader(buffer, offset);
+    if (!box) break;
+    topLevel.push(box);
+    offset = box.end;
+  }
+
+  const chunkTables = [];
+  ["stco", "co64"].forEach((type) => {
+    const marker = Buffer.from(type, "ascii");
+    let cursor = 4;
+    while (cursor < buffer.length && chunkTables.length < 128) {
+      const typeOffset = buffer.indexOf(marker, cursor);
+      if (typeOffset === -1) break;
+      const box = readMp4BoxHeader(buffer, typeOffset - 4);
+      cursor = typeOffset + 4;
+      if (!box || box.type !== type || box.size < 16) {
+        continue;
+      }
+      const count = buffer.readUInt32BE(box.offset + box.headerSize + 4);
+      const width = type === "co64" ? 8 : 4;
+      const valuesOffset = box.offset + box.headerSize + 8;
+      if (count > 1000000 || valuesOffset + count * width > box.end) {
+        continue;
+      }
+      const values = [];
+      let unsorted = false;
+      for (let index = 0; index < count; index += 1) {
+        const entryOffset = valuesOffset + index * width;
+        const value = width === 8 ? buffer.readBigUInt64BE(entryOffset) : BigInt(buffer.readUInt32BE(entryOffset));
+        if (values.length && value < values[values.length - 1]) {
+          unsorted = true;
+        }
+        values.push(value);
+      }
+      chunkTables.push({ ...box, count, width, valuesOffset, values, unsorted });
+    }
+  });
+
+  const lastBox = topLevel[topLevel.length - 1];
+  const trailingFreeTrack =
+    lastBox && lastBox.type === "free" && lastBox.size > 64 && topLevel.some((box) => box.type === "moov") ? lastBox : null;
+  return {
+    topLevel,
+    chunkTables,
+    trailingFreeTrack,
+    anomalies: [
+      ...(trailingFreeTrack ? [`Trailing free box after moov (${trailingFreeTrack.size} bytes) may be a hidden trak box.`] : []),
+      ...chunkTables.filter((table) => table.unsorted).map((table) => `${table.type} table at ${table.offset} has unsorted chunk offsets.`),
+    ],
+  };
+}
+
+function extractMp4Clues(filePath, outputRoot) {
+  const buffer = fs.readFileSync(filePath);
+  const report = analyzeMp4Buffer(buffer);
+  if (!report) {
+    throw new Error("\u6ca1\u6709\u89e3\u6790\u5230\u53ef\u7528\u7684 MP4 box \u7ed3\u6784\u3002");
+  }
+  const baseName = sanitizeSegment(path.parse(filePath).name);
+  const lines = ["# MP4 BOX SUMMARY", `file: ${path.basename(filePath)}`, ""];
+  report.topLevel.forEach((box) => lines.push(`${box.type} offset=${box.offset} size=${box.size}`));
+  lines.push("", "# CHUNK TABLES");
+  report.chunkTables.forEach((table) => lines.push(`${table.type} offset=${table.offset} entries=${table.count} unsorted=${table.unsorted}`));
+  lines.push("", "# ANOMALIES");
+  lines.push(...(report.anomalies.length ? report.anomalies : ["none detected"]));
+  const createdFiles = [writeGeneratedFile(outputRoot, `${baseName}-mp4-boxes.txt`, `${lines.join("\n")}\n`)];
+
+  if (report.trailingFreeTrack || report.chunkTables.some((table) => table.unsorted)) {
+    const repaired = Buffer.from(buffer);
+    if (report.trailingFreeTrack) {
+      repaired.write("trak", report.trailingFreeTrack.offset + 4, 4, "ascii");
+    }
+    report.chunkTables
+      .filter((table) => table.unsorted)
+      .forEach((table) => {
+        const sorted = [...table.values].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+        sorted.forEach((value, index) => {
+          const entryOffset = table.valuesOffset + index * table.width;
+          if (table.width === 8) repaired.writeBigUInt64BE(value, entryOffset);
+          else repaired.writeUInt32BE(Number(value), entryOffset);
+        });
+      });
+    createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-repaired.mp4`, repaired));
+  }
+
+  return {
+    message: report.anomalies.length ? "\u5df2\u68c0\u6d4b\u5e76\u4fee\u590d MP4 box / chunk offset \u5f02\u5e38\u3002" : "\u5df2\u5bfc\u51fa MP4 box \u7ed3\u6784\u3002",
+    createdFiles,
+  };
+}
+
 function getJpegMarkerName(marker) {
   if (marker === 0xda) {
     return "SOS";
@@ -8696,6 +9016,11 @@ function extractImageMetadata(filePath, outputRoot) {
   parseGifTextExtensions(buffer).forEach((item) => {
     lines.push(`GIF ${item.kind}${item.identifier ? ` (${item.identifier})` : ""}: ${item.text}`);
   });
+  collectGifDescriptorBitstreams(buffer).forEach((item) => {
+    lines.push(`GIF ${item.label} frames=${item.frameCount}`);
+    item.printable.forEach((value) => lines.push(value));
+    item.flags.forEach((flag) => lines.push(flag.value));
+  });
 
   if (!lines.length) {
     throw new Error("\u6ca1\u6709\u63d0\u53d6\u5230\u660e\u663e\u7684\u56fe\u50cf\u5143\u6570\u636e\u6216\u6ce8\u91ca\u5185\u5bb9\u3002");
@@ -8770,6 +9095,9 @@ async function runArtifactActionInternal(actionId, filePath, outputRoot, options
   if (actionId === "extract-image-metadata") {
     return extractImageMetadata(filePath, baseDir);
   }
+  if (actionId === "extract-mp4-clues") {
+    return extractMp4Clues(filePath, baseDir);
+  }
   if (actionId === "extract-jpeg-segments") {
     return extractJpegSegments(filePath, baseDir);
   }
@@ -8840,6 +9168,9 @@ function shouldAutoRun(actionId, artifact) {
   }
   if (actionId === "extract-image-metadata") {
     return artifact.depth === 0;
+  }
+  if (actionId === "extract-mp4-clues") {
+    return artifact.badge === "MP4" && artifact.depth === 0;
   }
   if (actionId === "extract-jpeg-segments") {
     return artifact.badge === "JPEG" && artifact.depth === 0;
@@ -8958,12 +9289,16 @@ async function buildPipelineArtifacts(rootPaths, outputRoot, options = {}) {
           });
         });
       } catch (error) {
+        const message = error?.message || String(error);
+        if (action.id === "decode-encoded-text" && message.includes("\u6ca1\u6709\u627e\u5230\u53ef\u76f4\u63a5\u89e3\u7801")) {
+          continue;
+        }
         pipelineErrors.push({
           actionId: action.id,
           actionLabel: action.label,
           sourcePath: artifact.path,
           sourceName: artifact.name,
-          message: error?.message || String(error),
+          message,
           guide: buildFailureGuide(error, action, artifact),
         });
       }

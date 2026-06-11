@@ -10,7 +10,8 @@ This project is intentionally limited to legitimate CTF training workflows:
 - extract likely flag candidates from text, ASCII / UTF-16 strings, recursive encoded content, and CJK codepoint byte projection
 - automatically unpack ZIP, GZIP, TAR, and TGZ content and continue recursive analysis
 - automatically decode base64, base58, base91, hex, base32, ascii85/Z85, URL-encoded, quoted-printable, UUEncode, binary/decimal byte streams, escaped byte text, A1Z26, NATO phonetic words, DNA 2-bit streams, single-byte XOR, ROT/Caesar, Affine, Rail Fence, Morse, Polybius, Bacon, Brainfuck/Ook, zero-width text, whitespace stego, Unicode tag text, and compressed text layers when they produce useful local results
-- automatically extract solvable image clues such as appended payloads, PNG text chunks, PNG/BMP low-bit-plane candidates, GIF comment/application/plain-text extensions, and JPEG COM / XMP / APP segment payloads
+- automatically extract solvable image clues such as appended payloads, PNG text chunks, PNG/BMP low-bit-plane candidates, GIF comment/application/plain-text extensions, GIF image-descriptor bitstreams, and JPEG COM / XMP / APP segment payloads
+- automatically inspect MP4/ISO-BMFF top-level boxes and chunk-offset tables, then repair hidden trailing tracks and unsorted `stco`/`co64` tables into derived playable files
 - automatically decode QR and 1D barcode payloads from local images and export RGB / luminance / edge / JPEG-block visualization views for image-based challenges
 - automatically summarize local traffic captures, extracting HTTP requests, DNS names, TLS SNI, cookies/tokens, and exported HTTP objects
 - automatically extract PDF metadata, XMP packets, readable Flate streams, and OOXML/Office package contents for recursive local analysis
@@ -38,7 +39,7 @@ This project does **not** target real-world systems and should not be used for u
 - `reverse`: ELF / PE / APK structure extraction, strings/import/export/symbol triage, and flow hints
 - `pwn`: ELF checksec-lite, risky import/function surface, local/network I/O and seccomp/alarm/heap profiles, writable/executable/RWX/staging memory surfaces, interesting menu/format/shell strings, prioritized ret2win/overflow/format-string/GOT/ORW/ROP hypotheses, short x86/x64 ROP gadget candidates, argument-control/syscall/stack-pivot capability summaries, loader/shared-library clues, and protection-oriented next steps
 - `forensic`: pcap/pcapng session extraction, archive recursion, document extraction, and hidden-artifact oriented workflow hints
-- `misc`: image/stego and mixed-artifact triage with local auto-processing where deterministic
+- `misc`: image/GIF/video stego, MP4 container repair, and mixed-artifact triage with local auto-processing where deterministic
 
 ## Tool-Backed Workflow
 
@@ -77,6 +78,7 @@ Deleting the sandbox folder removes generated analysis data and future bundled h
 - `src/ctf_compass/`: application package
 - `desktop/`: Electron desktop shell and UI
 - `docs/`: architecture and challenge methodology guides
+- `docs/public-challenge-benchmarks-2026.md`: repeatable validation notes from recent public CTF challenge releases
 - `plugins/`: future plugin definitions for category-specific helpers
 
 ## Desktop App
@@ -94,7 +96,7 @@ npm run dist:dir
 
 The unpacked Windows app will be written to `release/win-unpacked/`.
 
-A downloadable zip can be created from the unpacked build. The current local package name is `release/CTF-Compass-0.5.0-win-x64.zip`.
+A downloadable zip can be created from the unpacked build. The current local package name is `release/CTF-Compass-0.5.1-win-x64.zip`.
 
 ## GitHub Releases
 
