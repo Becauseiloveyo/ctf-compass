@@ -13,7 +13,9 @@ This project is intentionally limited to legitimate CTF training workflows:
 - automatically extract solvable image clues such as appended payloads, PNG text chunks, PNG/BMP low-bit-plane candidates, GIF comment/application/plain-text extensions, GIF image-descriptor bitstreams, and JPEG COM / XMP / APP segment payloads
 - automatically inspect MP4/ISO-BMFF top-level boxes and chunk-offset tables, then repair hidden trailing tracks and unsorted `stco`/`co64` tables into derived playable files
 - automatically decode QR and 1D barcode payloads from local images and export RGB / luminance / edge / JPEG-block visualization views for image-based challenges
-- automatically summarize local traffic captures, extracting HTTP requests, DNS names, TLS SNI, cookies/tokens, and exported HTTP objects
+- automatically detect modified PNG IHDR dimensions from IDAT scanline structure and generate repaired dimension candidates
+- automatically summarize local traffic captures, extracting HTTP requests, DNS names, TLS SNI, cookies/tokens, USB HID keyboard text, USB mouse tracks, and exported HTTP objects
+- safely inspect ONNX, Safetensors, Pickle/Joblib, and checkpoint-style model attachments for metadata, tensors, operators, prompt strings, and unsafe deserialization indicators without executing model content
 - automatically extract PDF metadata, XMP packets, readable Flate streams, and OOXML/Office package contents for recursive local analysis
 - automatically inspect WAV metadata, PCM LSB candidates, tone / morse hints, and waveform / spectrogram views for audio-based local challenges
 - automatically inspect ELF / PE / APK attachments, extracting headers, sections, imports / exports, symbol / relocation summaries, interpreter / shared-library hints, ELF roles, GNU Build IDs and GLIBC versions, checksec-lite protections, risky Pwn imports, I/O/network/heap/sandbox profiles, prioritized Pwn paths, short x86/x64 ROP gadget candidates, manifest strings, DEX method indexes, Android string-pool resources, and unpacked package contents for recursive local analysis
@@ -38,7 +40,7 @@ This project does **not** target real-world systems and should not be used for u
 - `web`: challenge metadata and traffic-based session/auth clue routing
 - `reverse`: ELF / PE / APK structure extraction, strings/import/export/symbol triage, and flow hints
 - `pwn`: ELF checksec-lite, risky import/function surface, local/network I/O and seccomp/alarm/heap profiles, writable/executable/RWX/staging memory surfaces, interesting menu/format/shell strings, prioritized ret2win/overflow/format-string/GOT/ORW/ROP hypotheses, short x86/x64 ROP gadget candidates, argument-control/syscall/stack-pivot capability summaries, loader/shared-library clues, and protection-oriented next steps
-- `forensic`: pcap/pcapng session extraction, archive recursion, document extraction, and hidden-artifact oriented workflow hints
+- `forensic`: pcap/pcapng session extraction, USB HID reconstruction, archive recursion, document extraction, and hidden-artifact oriented workflow hints
 - `misc`: image/GIF/video stego, MP4 container repair, and mixed-artifact triage with local auto-processing where deterministic
 
 ## Tool-Backed Workflow
@@ -79,6 +81,7 @@ Deleting the sandbox folder removes generated analysis data and future bundled h
 - `desktop/`: Electron desktop shell and UI
 - `docs/`: architecture and challenge methodology guides
 - `docs/public-challenge-benchmarks-2026.md`: repeatable validation notes from recent public CTF challenge releases
+- `docs/huanghe-cup-prep.md`: Huanghe Cup public-history capability matrix and pre-competition checklist
 - `plugins/`: future plugin definitions for category-specific helpers
 
 ## Desktop App
@@ -96,7 +99,7 @@ npm run dist:dir
 
 The unpacked Windows app will be written to `release/win-unpacked/`.
 
-A downloadable zip can be created from the unpacked build. The current local package name is `release/CTF-Compass-0.5.1-win-x64.zip`.
+A downloadable zip can be created from the unpacked build. The current local package name is `release/CTF-Compass-0.5.2-win-x64.zip`.
 
 ## GitHub Releases
 

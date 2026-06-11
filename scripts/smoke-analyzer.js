@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const zlib = require("zlib");
 const AdmZip = require("adm-zip");
+const { PNG } = require("pngjs");
 const { analyzeChallenge } = require("../desktop/analyzer");
 
 const DEFAULT_SAMPLE = path.resolve(__dirname, "..", "tmp", "input", "a05ed035-b476-49d6-9b32-462ff13c5944.zip");
@@ -343,6 +344,134 @@ function createMp4HiddenTrack(mp4Path, flag) {
   fs.mkdirSync(path.dirname(mp4Path), { recursive: true });
   fs.writeFileSync(mp4Path, Buffer.concat([ftyp, mdat, moov, hiddenTrack]));
   return mp4Path;
+}
+
+function createUsbKeyboardPcap(filePath, text) {
+  const pairs = {
+    "\n": [0, 40], " ": [0, 44], "-": [0, 45], "_": [2, 45], "=": [0, 46], "+": [2, 46],
+    "[": [0, 47], "{": [2, 47], "]": [0, 48], "}": [2, 48], "\\": [0, 49], "|": [2, 49],
+    ";": [0, 51], ":": [2, 51], "'": [0, 52], "\"": [2, 52], ",": [0, 54], "<": [2, 54],
+    ".": [0, 55], ">": [2, 55], "/": [0, 56], "?": [2, 56],
+  };
+  "abcdefghijklmnopqrstuvwxyz".split("").forEach((char, index) => {
+    pairs[char] = [0, 4 + index];
+    pairs[char.toUpperCase()] = [2, 4 + index];
+  });
+  const shiftedDigits = ["!", "@", "#", "$", "%", "^", "&", "*", "(", ")"];
+  "1234567890".split("").forEach((char, index) => {
+    pairs[char] = [0, 30 + index];
+    pairs[shiftedDigits[index]] = [2, 30 + index];
+  });
+
+  const packets = [];
+  for (const char of text) {
+    const pair = pairs[char];
+    if (!pair) throw new Error(`unsupported HID smoke character: ${char}`);
+    for (const report of [Buffer.from([pair[0], 0, pair[1], 0, 0, 0, 0, 0]), Buffer.alloc(8)]) {
+      const usbPcap = Buffer.alloc(27);
+      usbPcap.writeUInt16LE(27, 0);
+      usbPcap.writeUInt32LE(report.length, 23);
+      packets.push(Buffer.concat([usbPcap, report]));
+    }
+  }
+
+  const globalHeader = Buffer.alloc(24);
+  globalHeader.writeUInt32LE(0xa1b2c3d4, 0);
+  globalHeader.writeUInt16LE(2, 4);
+  globalHeader.writeUInt16LE(4, 6);
+  globalHeader.writeUInt32LE(65535, 16);
+  globalHeader.writeUInt32LE(249, 20);
+  const records = packets.map((packet, index) => {
+    const header = Buffer.alloc(16);
+    header.writeUInt32LE(index, 0);
+    header.writeUInt32LE(packet.length, 8);
+    header.writeUInt32LE(packet.length, 12);
+    return Buffer.concat([header, packet]);
+  });
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, Buffer.concat([globalHeader, ...records]));
+  return filePath;
+}
+
+function createPngWrongDimensions(filePath, width = 64, height = 24) {
+  const png = new PNG({ width, height });
+  for (let index = 0; index < png.data.length; index += 4) {
+    png.data[index] = 36;
+    png.data[index + 1] = 112;
+    png.data[index + 2] = 96;
+    png.data[index + 3] = 255;
+  }
+  const buffer = PNG.sync.write(png);
+  buffer.writeUInt32BE(1, 16);
+  buffer.writeUInt32BE(1, 20);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, buffer);
+  return filePath;
+}
+
+async function runPngDimensionCase(root, pngPath) {
+  const result = await analyzeChallenge(
+    {
+      title: "PNG wrong dimensions smoke",
+      description: "Detect a modified IHDR and generate repaired dimension candidates.",
+      artifacts: [pngPath],
+    },
+    path.join(root, "png-dimension-repair-out"),
+  );
+  const repairLog = result.pipelineLog.find((item) => item.actionId === "repair-png-dimensions");
+  const repaired = repairLog?.createdArtifacts?.find((item) => /64x24\.png$/i.test(item.name));
+  if (!repaired) {
+    throw new Error(`case png-dimension-repair: expected repaired 64x24 PNG, got ${JSON.stringify(result.pipelineLog, null, 2)}`);
+  }
+  const decoded = PNG.sync.read(fs.readFileSync(repaired.path));
+  if (decoded.width !== 64 || decoded.height !== 24) {
+    throw new Error(`case png-dimension-repair: repaired PNG is not readable as 64x24`);
+  }
+  return {
+    name: "png-dimension-repair",
+    status: result.solver?.status,
+    actionsRun: result.solver?.actionsRun,
+    artifacts: result.challenge?.artifactCount,
+  };
+}
+
+function createSafetensorsFixture(filePath, flag) {
+  const header = Buffer.from(
+    JSON.stringify({
+      __metadata__: { challenge: flag, prompt: "inspect model metadata safely" },
+      "layer.weight": { dtype: "F32", shape: [1, 1], data_offsets: [0, 4] },
+    }),
+    "utf8",
+  );
+  const prefix = Buffer.alloc(8);
+  prefix.writeBigUInt64LE(BigInt(header.length));
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, Buffer.concat([prefix, header, Buffer.alloc(4)]));
+  return filePath;
+}
+
+async function runModelCase(root, modelPath, expectedFlag) {
+  const result = await analyzeChallenge(
+    {
+      title: "model reverse smoke",
+      description: "Inspect Safetensors metadata without executing model content.",
+      artifacts: [modelPath],
+    },
+    path.join(root, "model-reverse-out"),
+  );
+  if (!collectFlags(result).includes(expectedFlag)) {
+    throw new Error(`case model-reverse: expected ${expectedFlag}, got ${collectFlags(result).join(", ") || "no flags"}`);
+  }
+  if (!result.pipelineLog.some((item) => item.actionId === "extract-model-clues")) {
+    throw new Error("case model-reverse: model report action did not run");
+  }
+  return {
+    name: "model-reverse",
+    status: result.solver?.status,
+    primaryFlag: result.solver?.primaryFlag?.value,
+    actionsRun: result.solver?.actionsRun,
+    artifacts: result.challenge?.artifactCount,
+  };
 }
 
 function align(value, alignment) {
@@ -689,6 +818,28 @@ async function main() {
       artifacts: [placeholderPath],
     }),
   );
+
+  const usbFlag = "flag{usb_hid_smoke}";
+  const usbPcapPath = createUsbKeyboardPcap(path.join(root, "input", "usb-keyboard.pcap"), usbFlag);
+  results.push(
+    await runCase(
+      root,
+      "usb-hid-keyboard",
+      {
+        title: "USB HID keyboard smoke",
+        description: "USBPcap keyboard reports should be reconstructed into text.",
+        artifacts: [usbPcapPath],
+      },
+      usbFlag,
+    ),
+  );
+
+  const wrongDimensionPng = createPngWrongDimensions(path.join(root, "input", "wrong-dimensions.png"));
+  results.push(await runPngDimensionCase(root, wrongDimensionPng));
+
+  const modelFlag = "flag{model_metadata_smoke}";
+  const modelPath = createSafetensorsFixture(path.join(root, "input", "challenge.safetensors"), modelFlag);
+  results.push(await runModelCase(root, modelPath, modelFlag));
 
   const pwnFlag = "flag{pwn_static_smoke}";
   const pwnElfPath = createPwnElf64(path.join(root, "input", "pwn-smoke.elf"), pwnFlag);

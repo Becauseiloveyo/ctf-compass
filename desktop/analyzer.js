@@ -255,7 +255,7 @@ const BUNDLED_TOOL_CAPABILITIES = [
 const CATEGORY_RULES = {
   crypto: ["rsa", "aes", "xor", "cipher", "nonce", "modulus", "prime", "decrypt", "encrypt", "base64", "hex"],
   web: ["http", "https", "cookie", "session", "jwt", "request", "route", "upload", "template", "csrf", "xss", "sql", "login"],
-  reverse: ["binary", "elf", "pe32", "exe", "dll", "ghidra", "ida", "strings", "disasm", "symbol", "apk", "java"],
+  reverse: ["binary", "elf", "pe32", "exe", "dll", "ghidra", "ida", "strings", "disasm", "symbol", "apk", "java", "onnx", "safetensors", "model reverse"],
   pwn: ["overflow", "heap", "rop", "libc", "canary", "format string", "uaf", "fastbin", "tcache", "stack smashing"],
   forensic: ["pcap", "pcapng", "traffic", "dns", "http", "memory", "disk", "metadata", "artifact", "timeline", "capture"],
   misc: [
@@ -276,6 +276,8 @@ const CATEGORY_RULES = {
     "chunk",
     "stco",
     "co64",
+    "prompt injection",
+    "ai security",
   ],
 };
 
@@ -284,6 +286,7 @@ const LOOSE_FLAG_PREFIX = /\bflag\s*[:=_-]\s*[a-zA-Z0-9_\/+=-]{6,160}\b/i;
 const LOOSE_FLAG_PREFIX_GLOBAL = /\bflag\s*[:=_-]\s*[a-zA-Z0-9_\/+=-]{6,160}\b/gi;
 const NATURAL_TEXT_HINT = /\b(?:the|this|that|flag|password|secret|cookie|session|token|login|http|https|user|admin|hello|world|image|file|data|text)\b/i;
 const OFFICE_DOCUMENT_EXTENSIONS = [".docx", ".xlsx", ".pptx", ".docm", ".xlsm", ".pptm", ".odt", ".ods", ".odp"];
+const MODEL_EXTENSIONS = [".onnx", ".safetensors", ".pkl", ".pickle", ".joblib", ".pt", ".pth", ".ckpt"];
 
 function formatBytes(size) {
   if (size < 1024) {
@@ -1952,6 +1955,9 @@ function detectFamily(filePath, sample) {
   if (["zip", "gzip", "tar"].includes(magic) || [".zip", ".7z", ".rar", ".tar", ".gz", ".tgz"].includes(extension)) {
     return { family: "archive", badge: magic.toUpperCase() || extension.slice(1).toUpperCase() || "ZIP" };
   }
+  if (MODEL_EXTENSIONS.includes(extension)) {
+    return { family: "binary", badge: extension.slice(1).toUpperCase() || "MODEL" };
+  }
   if (["elf", "pe"].includes(magic) || [".exe", ".dll", ".bin", ".so", ".elf", ".apk", ".jar"].includes(extension)) {
     return { family: "binary", badge: magic.toUpperCase() || extension.slice(1).toUpperCase() || "BIN" };
   }
@@ -2061,6 +2067,102 @@ function readPngDimensions(buffer) {
     width: buffer.readUInt32BE(16),
     height: buffer.readUInt32BE(20),
   };
+}
+
+function pngCrc32(buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function analyzePngDimensionCandidates(buffer) {
+  if (
+    detectMagic(buffer) !== "png" ||
+    buffer.length < 33 ||
+    buffer.readUInt32BE(8) !== 13 ||
+    buffer.subarray(12, 16).toString("ascii") !== "IHDR"
+  ) {
+    return null;
+  }
+  const width = buffer.readUInt32BE(16);
+  const height = buffer.readUInt32BE(20);
+  const bitDepth = buffer[24];
+  const colorType = buffer[25];
+  const interlace = buffer[28];
+  const channels = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[colorType];
+  if (!channels || interlace !== 0 || ![1, 2, 4, 8, 16].includes(bitDepth)) {
+    return { width, height, candidates: [], anomalous: false, reason: "unsupported PNG color/interlace mode" };
+  }
+  const idat = Buffer.concat(iteratePngChunks(buffer).filter((chunk) => chunk.type === "IDAT").map((chunk) => chunk.data));
+  if (!idat.length) {
+    return { width, height, candidates: [], anomalous: false, reason: "no IDAT data" };
+  }
+  let inflated;
+  try {
+    inflated = zlib.inflateSync(idat);
+  } catch (_error) {
+    return { width, height, candidates: [], anomalous: false, reason: "IDAT inflate failed" };
+  }
+
+  const candidates = [];
+  for (let candidateWidth = 1; candidateWidth <= 8192; candidateWidth += 1) {
+    const rowBytes = Math.ceil((candidateWidth * channels * bitDepth) / 8);
+    const stride = rowBytes + 1;
+    if (inflated.length % stride !== 0) {
+      continue;
+    }
+    const candidateHeight = inflated.length / stride;
+    if (candidateHeight < 1 || candidateHeight > 8192 || candidateWidth * candidateHeight > 40_000_000) {
+      continue;
+    }
+    const checks = Math.min(candidateHeight, 256);
+    let validFilters = 0;
+    for (let row = 0; row < checks; row += 1) {
+      if (inflated[row * stride] <= 4) {
+        validFilters += 1;
+      }
+    }
+    const filterScore = checks ? validFilters / checks : 0;
+    if (filterScore < 0.75) {
+      continue;
+    }
+    const ratio = candidateWidth / candidateHeight;
+    const aspectScore = ratio >= 0.15 && ratio <= 6 ? 0.08 : 0;
+    candidates.push({
+      width: candidateWidth,
+      height: candidateHeight,
+      filterScore,
+      score: filterScore + aspectScore,
+      original: candidateWidth === width && candidateHeight === height,
+    });
+  }
+  candidates.sort((left, right) => right.score - left.score || Math.abs(Math.log(left.width / left.height)) - Math.abs(Math.log(right.width / right.height)));
+  const original = candidates.find((item) => item.original);
+  const bestAlternative = candidates.find((item) => !item.original);
+  const anomalous = Boolean(bestAlternative && bestAlternative.filterScore >= 0.98 && (!original || bestAlternative.filterScore - original.filterScore >= 0.15));
+  return {
+    width,
+    height,
+    bitDepth,
+    colorType,
+    inflatedBytes: inflated.length,
+    candidates: candidates.slice(0, 12),
+    anomalous,
+    reason: anomalous ? "IHDR dimensions do not match IDAT scanline structure" : "",
+  };
+}
+
+function patchPngDimensions(buffer, width, height) {
+  const repaired = Buffer.from(buffer);
+  repaired.writeUInt32BE(width, 16);
+  repaired.writeUInt32BE(height, 20);
+  repaired.writeUInt32BE(pngCrc32(repaired.subarray(12, 29)), 29);
+  return repaired;
 }
 
 function decodeBmpRaster(buffer) {
@@ -3298,6 +3400,113 @@ function parseCaptureFrames(buffer) {
   return [];
 }
 
+const USB_CAPTURE_LINK_TYPES = new Set([189, 220, 249]);
+const HID_KEY_MAP = {
+  4: ["a", "A"], 5: ["b", "B"], 6: ["c", "C"], 7: ["d", "D"], 8: ["e", "E"], 9: ["f", "F"],
+  10: ["g", "G"], 11: ["h", "H"], 12: ["i", "I"], 13: ["j", "J"], 14: ["k", "K"], 15: ["l", "L"],
+  16: ["m", "M"], 17: ["n", "N"], 18: ["o", "O"], 19: ["p", "P"], 20: ["q", "Q"], 21: ["r", "R"],
+  22: ["s", "S"], 23: ["t", "T"], 24: ["u", "U"], 25: ["v", "V"], 26: ["w", "W"], 27: ["x", "X"],
+  28: ["y", "Y"], 29: ["z", "Z"],
+  30: ["1", "!"], 31: ["2", "@"], 32: ["3", "#"], 33: ["4", "$"], 34: ["5", "%"],
+  35: ["6", "^"], 36: ["7", "&"], 37: ["8", "*"], 38: ["9", "("], 39: ["0", ")"],
+  40: ["\n", "\n"], 41: ["<ESC>", "<ESC>"], 42: ["<BACKSPACE>", "<BACKSPACE>"], 43: ["\t", "\t"], 44: [" ", " "],
+  45: ["-", "_"], 46: ["=", "+"], 47: ["[", "{"], 48: ["]", "}"], 49: ["\\", "|"],
+  51: [";", ":"], 52: ["'", "\""], 53: ["`", "~"], 54: [",", "<"], 55: [".", ">"], 56: ["/", "?"],
+};
+
+function extractUsbCapturePayload(frame) {
+  const data = frame.data;
+  if (!USB_CAPTURE_LINK_TYPES.has(frame.linkType) || !data.length) {
+    return null;
+  }
+  if (frame.linkType === 249 && data.length >= 27) {
+    const headerLength = data.readUInt16LE(0);
+    if (headerLength >= 27 && headerLength <= data.length) {
+      return data.subarray(headerLength);
+    }
+  }
+  if ((frame.linkType === 189 || frame.linkType === 220) && data.length > 64) {
+    return data.subarray(64);
+  }
+  return data;
+}
+
+function findKeyboardReport(payload) {
+  if (!payload || payload.length < 8) {
+    return null;
+  }
+  const starts = dedupeStrings([0, Math.max(0, payload.length - 8)].map(String)).map(Number);
+  for (const start of starts) {
+    const report = payload.subarray(start, start + 8);
+    if (report.length === 8 && report[1] === 0 && Array.from(report.subarray(2)).every((value) => value === 0 || (value >= 4 && value <= 0x65))) {
+      return report;
+    }
+  }
+  return null;
+}
+
+function decodeHidKeyboardReports(reports) {
+  let text = "";
+  const events = [];
+  let previous = new Set();
+  reports.forEach((report, frameIndex) => {
+    const shift = Boolean(report[0] & 0x22);
+    const current = new Set(Array.from(report.subarray(2)).filter(Boolean));
+    current.forEach((keyCode) => {
+      if (previous.has(keyCode)) {
+        return;
+      }
+      const pair = HID_KEY_MAP[keyCode];
+      const value = pair ? pair[shift ? 1 : 0] : `<KEY_${keyCode}>`;
+      if (value === "<BACKSPACE>") {
+        text = text.slice(0, -1);
+      } else if (!value.startsWith("<") || value === "<ESC>") {
+        text += value;
+      }
+      events.push({ frameIndex, modifier: report[0], keyCode, value });
+    });
+    previous = current;
+  });
+  return { keyboardText: text, keyEvents: events };
+}
+
+function analyzeUsbHidFrames(frames) {
+  const usbFrames = frames.filter((frame) => USB_CAPTURE_LINK_TYPES.has(frame.linkType));
+  if (!usbFrames.length) {
+    return { frameCount: 0, keyboardText: "", keyEvents: [], mouseEvents: [] };
+  }
+  const keyboardReports = [];
+  const mouseEvents = [];
+  let mouseX = 0;
+  let mouseY = 0;
+  usbFrames.forEach((frame, frameIndex) => {
+    const payload = extractUsbCapturePayload(frame);
+    if (!payload || !payload.length) {
+      return;
+    }
+    const keyboard = findKeyboardReport(payload);
+    if (keyboard) {
+      keyboardReports.push(keyboard);
+      return;
+    }
+    if (payload.length >= 4 && payload.length <= 8) {
+      const dx = payload.readInt8(1);
+      const dy = payload.readInt8(2);
+      const wheel = payload.readInt8(3);
+      if (dx || dy || wheel || payload[0]) {
+        mouseX += dx;
+        mouseY += dy;
+        mouseEvents.push({ frameIndex, buttons: payload[0], dx, dy, wheel, x: mouseX, y: mouseY });
+      }
+    }
+  });
+  return {
+    frameCount: usbFrames.length,
+    ...decodeHidKeyboardReports(keyboardReports),
+    mouseEvents,
+  };
+}
+
 function parseDnsName(buffer, startOffset, depth = 0) {
   if (depth > 8 || startOffset >= buffer.length) {
     return { name: "", nextOffset: startOffset };
@@ -3559,12 +3768,19 @@ function analyzeTrafficBuffer(buffer) {
     tokens: [],
     sessions: [],
     exportedObjects: [],
+    usbHid: {
+      frameCount: 0,
+      keyboardText: "",
+      keyEvents: [],
+      mouseEvents: [],
+    },
   };
 
   if (!frames.length) {
     return summary;
   }
 
+  summary.usbHid = analyzeUsbHidFrames(frames);
   const sessions = new Map();
 
   frames.forEach((frame) => {
@@ -3705,6 +3921,16 @@ function buildTrafficSummaryText(fileName, summary) {
   if (summary.sessions.length) {
     lines.push("# SESSIONS");
     summary.sessions.forEach((item) => lines.push(`${item.protocol} ${item.endpoints} packets=${item.packets} bytes=${item.bytes}`));
+    lines.push("");
+  }
+  if (summary.usbHid?.frameCount) {
+    lines.push("# USB-HID");
+    lines.push(`frames: ${summary.usbHid.frameCount}`);
+    lines.push(`key-events: ${summary.usbHid.keyEvents.length}`);
+    lines.push(`mouse-events: ${summary.usbHid.mouseEvents.length}`);
+    if (summary.usbHid.keyboardText) {
+      lines.push("", "## KEYBOARD TEXT", summary.usbHid.keyboardText);
+    }
     lines.push("");
   }
 
@@ -5490,6 +5716,61 @@ function buildApkSummaryText(fileName, report) {
   return `${lines.join("\n")}\n`;
 }
 
+function analyzeModelArtifact(buffer, extension) {
+  const report = {
+    format: extension.slice(1).toUpperCase() || "MODEL",
+    metadata: [],
+    tensors: [],
+    operators: [],
+    dangerousPickleHints: [],
+    strings: [],
+  };
+  const strings = dedupeStrings(extractAsciiStrings(buffer, 4, 3000).concat(extractUnicodeStrings(buffer, 4, 500)));
+  report.strings = strings.filter((value) => /flag|secret|token|prompt|system|model|tensor|layer|input|output/i.test(value)).slice(0, 80);
+
+  if (extension === ".safetensors" && buffer.length >= 8) {
+    try {
+      const headerLength = Number(buffer.readBigUInt64LE(0));
+      if (headerLength > 0 && headerLength <= Math.min(buffer.length - 8, 16 * 1024 * 1024)) {
+        const header = JSON.parse(buffer.subarray(8, 8 + headerLength).toString("utf8"));
+        report.format = "SAFETENSORS";
+        Object.entries(header.__metadata__ || {}).forEach(([key, value]) => report.metadata.push(`${key}: ${value}`));
+        Object.entries(header)
+          .filter(([key]) => key !== "__metadata__")
+          .slice(0, 200)
+          .forEach(([name, value]) => report.tensors.push(`${name} dtype=${value?.dtype || "?"} shape=${JSON.stringify(value?.shape || [])}`));
+      }
+    } catch (_error) {
+      // malformed model headers remain available to strings analysis
+    }
+  }
+
+  if (extension === ".onnx") {
+    const knownOps = [
+      "Conv", "Relu", "Gemm", "MatMul", "Add", "Mul", "Sub", "Div", "Softmax", "Sigmoid", "Tanh", "Reshape",
+      "Transpose", "Concat", "Slice", "Gather", "ReduceMean", "BatchNormalization", "Dropout", "Constant",
+    ];
+    report.operators = knownOps.filter((operator) => strings.includes(operator));
+  }
+
+  if ([".pkl", ".pickle", ".joblib", ".pt", ".pth", ".ckpt"].includes(extension)) {
+    report.dangerousPickleHints = strings
+      .filter((value) => /(?:^|\.)(?:os|posix|subprocess|builtins|eval|exec|system|popen|reduce)(?:$|\.)/i.test(value) || /__reduce__|subprocess|os\.system/i.test(value))
+      .slice(0, 40);
+  }
+  return report;
+}
+
+function buildModelReport(fileName, report) {
+  const lines = [`# MODEL ARTIFACT REPORT`, `file: ${fileName}`, `format: ${report.format}`, ""];
+  appendReportSection(lines, "metadata", report.metadata, "(none)");
+  appendReportSection(lines, "tensors", report.tensors, "(none)");
+  appendReportSection(lines, "operators", report.operators, "(none)");
+  appendReportSection(lines, "unsafe pickle indicators", report.dangerousPickleHints, "(none; content was not executed)");
+  appendReportSection(lines, "interesting strings", report.strings, "(none)");
+  return `${lines.join("\n")}\n`;
+}
+
 async function buildArtifactSignals(filePath) {
   const extension = path.extname(filePath).toLowerCase();
   const sampleLimit =
@@ -5560,6 +5841,7 @@ async function buildArtifactSignals(filePath) {
   let elfReport = null;
   let peReport = null;
   let apkReport = null;
+  let modelReport = null;
   let imageRaster = null;
   let qrPayload = null;
   let barcodePayload = null;
@@ -5567,11 +5849,20 @@ async function buildArtifactSignals(filePath) {
   let audioLSB = [];
   let audioSignal = null;
   let mp4Report = null;
+  let pngDimensionReport = null;
+  if (artifact.family === "image" && artifact.badge === "PNG") {
+    try {
+      pngDimensionReport = analyzePngDimensionCandidates(buffer);
+    } catch (_error) {
+      pngDimensionReport = null;
+    }
+  }
   if (artifact.family === "image") {
     try {
       imageRaster = decodeImageRaster(buffer);
       qrPayload = imageRaster ? detectQrPayload(buffer) : null;
-      barcodePayload = imageRaster && ["PNG", "JPEG"].includes(artifact.badge) ? await detectBarcodePayload(filePath) : null;
+      barcodePayload =
+        imageRaster && ["PNG", "JPEG"].includes(artifact.badge) && !pngDimensionReport?.anomalous ? await detectBarcodePayload(filePath) : null;
     } catch (_error) {
       imageRaster = null;
       qrPayload = null;
@@ -5611,6 +5902,8 @@ async function buildArtifactSignals(filePath) {
         peReport = parsePeBinary(buffer);
       } else if (artifact.badge === "APK" || extension === ".apk") {
         apkReport = parseApkPackage(filePath);
+      } else if (MODEL_EXTENSIONS.includes(extension)) {
+        modelReport = analyzeModelArtifact(buffer, extension);
       }
     } catch (_error) {
       elfReport = null;
@@ -5636,6 +5929,17 @@ async function buildArtifactSignals(filePath) {
         id: "extract-png-lsb",
         label: "\u63d0\u53d6 PNG \u4f4e\u4f4d\u5e73\u9762",
       });
+      if (pngDimensionReport?.anomalous) {
+        const candidate = pngDimensionReport.candidates.find((item) => !item.original);
+        artifact.highlights.push(
+          `PNG IHDR \u5c3a\u5bf8\u7591\u4f3c\u88ab\u4fee\u6539\uff0cIDAT \u5019\u9009 ${candidate?.width || "?"} x ${candidate?.height || "?"}\u3002`,
+        );
+        artifact.keywords.push("png", "dimension", "repair", "misc");
+        artifact.actions.push({
+          id: "repair-png-dimensions",
+          label: "\u4fee\u590d PNG \u5bbd\u9ad8",
+        });
+      }
       const textChunks = extractPngTextChunks(buffer);
       if (textChunks.length) {
         artifact.highlights.push(`PNG \u5185\u90e8\u6587\u672c\u5757 ${textChunks.length} \u6761\u3002`);
@@ -5857,6 +6161,21 @@ async function buildArtifactSignals(filePath) {
       artifact.highlights.push("\u53d1\u73b0 Cookie / Token / Authorization \u7c7b\u4fe1\u606f\u3002");
       artifact.keywords.push("cookie", "session");
     }
+    if (trafficSummary?.usbHid?.keyboardText) {
+      artifact.highlights.push(`USB HID \u952e\u76d8\u8fd8\u539f ${trafficSummary.usbHid.keyEvents.length} \u4e2a\u6309\u952e\u4e8b\u4ef6\u3002`);
+      artifact.keywords.push("usb", "hid", "keyboard", "forensic");
+      const usbFlags = findFlagCandidates(trafficSummary.usbHid.keyboardText, `${artifact.name} (USB HID keyboard)`);
+      artifact.flagCandidates = dedupeStrings(
+        artifact.flagCandidates.map((item) => `${item.value}@@${item.source}`).concat(usbFlags.map((item) => `${item.value}@@${item.source}`)),
+      ).map((entry) => {
+        const [value, source] = entry.split("@@");
+        return { value, source };
+      });
+    }
+    if (trafficSummary?.usbHid?.mouseEvents?.length) {
+      artifact.highlights.push(`USB HID \u9f20\u6807\u8f68\u8ff9 ${trafficSummary.usbHid.mouseEvents.length} \u4e2a\u4e8b\u4ef6\u3002`);
+      artifact.keywords.push("usb", "hid", "mouse", "forensic");
+    }
     if (lowered.includes("http/1.") || lowered.includes("get /") || lowered.includes("post /") || lowered.includes("host:")) {
       artifact.highlights.push("\u53d1\u73b0 HTTP \u8bf7\u6c42\u6216 Host \u7ebf\u7d22\u3002");
       artifact.keywords.push("http", "web");
@@ -5908,6 +6227,24 @@ async function buildArtifactSignals(filePath) {
     artifact.summary = "\u4e8c\u8fdb\u5236\u7c7b\u9644\u4ef6\uff0c\u53ef\u4ece strings\u3001\u5bfc\u5165\u8868\u3001\u6821\u9a8c\u5b57\u7b26\u4e32\u548c\u63a7\u5236\u6d41\u5207\u5165\u3002";
     artifact.keywords.push("binary");
     const unicodeStrings = extractUnicodeStrings(buffer, 4, 120);
+    if (modelReport) {
+      artifact.summary = "\u6a21\u578b/\u5e8f\u5217\u5316\u9644\u4ef6\uff0c\u5b89\u5168\u63d0\u53d6\u5143\u6570\u636e\u3001\u5f20\u91cf\u540d\u3001\u7b97\u5b50\u3001\u63d0\u793a\u8bcd\u548c\u5371\u9669\u53cd\u5e8f\u5217\u5316\u7ebf\u7d22\uff0c\u4e0d\u6267\u884c\u5185\u5bb9\u3002";
+      artifact.keywords.push("ai", "model", "model reverse", "prompt", "misc", extension.slice(1));
+      artifact.highlights.push(`${modelReport.format} \u6a21\u578b/\u5e8f\u5217\u5316\u9644\u4ef6\u3002`);
+      if (modelReport.tensors.length) {
+        artifact.highlights.push(`\u5f20\u91cf\u7d22\u5f15 ${modelReport.tensors.length} \u6761\u3002`);
+      }
+      if (modelReport.operators.length) {
+        artifact.highlights.push(`ONNX \u7b97\u5b50\uff1a${modelReport.operators.slice(0, 6).join(" / ")}`);
+      }
+      if (modelReport.dangerousPickleHints.length) {
+        artifact.highlights.push(`\u53d1\u73b0 ${modelReport.dangerousPickleHints.length} \u6761\u5371\u9669 Pickle \u53cd\u5e8f\u5217\u5316\u7ebf\u7d22\uff0c\u5df2\u7981\u6b62\u6267\u884c\u3002`);
+      }
+      artifact.actions.push({
+        id: "extract-model-clues",
+        label: "\u63d0\u53d6\u6a21\u578b\u7ebf\u7d22",
+      });
+    }
     if (artifact.badge === "APK" || extension === ".apk") {
       artifact.summary = "\u5b89\u5353 APK \u5305\uff0c\u53ef\u4ece Manifest\u3001DEX\u3001\u6743\u9650\u3001native lib \u548c\u5185\u5d4c\u8d44\u6e90\u5207\u5165\u3002";
       artifact.keywords.push("apk", "android", "mobile");
@@ -7229,6 +7566,22 @@ function exportStrings(filePath, outputRoot) {
   };
 }
 
+function extractModelClues(filePath, outputRoot) {
+  const extension = path.extname(filePath).toLowerCase();
+  const stat = fs.statSync(filePath);
+  const buffer = readSample(filePath, Math.min(stat.size, MAX_ARCHIVE_TOTAL_BYTES)).buffer;
+  const report = analyzeModelArtifact(buffer, extension);
+  const outPath = writeGeneratedFile(
+    outputRoot,
+    `${sanitizeSegment(path.parse(filePath).name)}-model-report.txt`,
+    buildModelReport(path.basename(filePath), report),
+  );
+  return {
+    message: "\u5df2\u5b89\u5168\u63d0\u53d6\u6a21\u578b\u5143\u6570\u636e\u3001\u5f20\u91cf/\u7b97\u5b50\u548c\u53cd\u5e8f\u5217\u5316\u7ebf\u7d22\uff0c\u672a\u6267\u884c\u6a21\u578b\u5185\u5bb9\u3002",
+    createdFiles: [outPath],
+  };
+}
+
 function formatOffset(offset) {
   return `0x${Number(offset || 0).toString(16).padStart(8, "0")}`;
 }
@@ -7480,9 +7833,19 @@ function extractTrafficSessions(filePath, outputRoot) {
   summary.exportedObjects.slice(0, MAX_HTTP_OBJECTS).forEach((item) => {
     createdFiles.push(writeGeneratedFile(outputRoot, item.name, item.content));
   });
+  if (summary.usbHid?.keyboardText) {
+    createdFiles.push(writeGeneratedFile(outputRoot, `${sanitizeSegment(path.parse(filePath).name)}-usb-keyboard.txt`, `${summary.usbHid.keyboardText}\n`));
+  }
+  if (summary.usbHid?.mouseEvents?.length) {
+    const csv = [
+      "frame,buttons,dx,dy,wheel,x,y",
+      ...summary.usbHid.mouseEvents.map((item) => `${item.frameIndex},${item.buttons},${item.dx},${item.dy},${item.wheel},${item.x},${item.y}`),
+    ].join("\n");
+    createdFiles.push(writeGeneratedFile(outputRoot, `${sanitizeSegment(path.parse(filePath).name)}-usb-mouse.csv`, `${csv}\n`));
+  }
 
   return {
-    message: "\u5df2\u63d0\u53d6 HTTP / DNS / TLS / \u4f1a\u8bdd\u7ebf\u7d22\uff0c\u5e76\u5bfc\u51fa\u53ef\u7ee7\u7eed\u5206\u6790\u7684\u5bf9\u8c61\u3002",
+    message: "\u5df2\u63d0\u53d6 HTTP / DNS / TLS / USB HID / \u4f1a\u8bdd\u7ebf\u7d22\uff0c\u5e76\u5bfc\u51fa\u53ef\u7ee7\u7eed\u5206\u6790\u7684\u5bf9\u8c61\u3002",
     createdFiles,
   };
 }
@@ -9049,6 +9412,32 @@ function extractPngText(filePath, outputRoot) {
   };
 }
 
+function repairPngDimensions(filePath, outputRoot) {
+  const buffer = fs.readFileSync(filePath);
+  const report = analyzePngDimensionCandidates(buffer);
+  if (!report?.anomalous) {
+    throw new Error("PNG IHDR \u5bbd\u9ad8\u4e0e IDAT \u626b\u63cf\u7ebf\u7ed3\u6784\u4e00\u81f4\uff0c\u6ca1\u6709\u9700\u8981\u81ea\u52a8\u4fee\u590d\u7684\u5c3a\u5bf8\u5f02\u5e38\u3002");
+  }
+  const baseName = sanitizeSegment(path.parse(filePath).name);
+  const alternatives = report.candidates.filter((item) => !item.original && item.filterScore >= 0.98).slice(0, 4);
+  const lines = [
+    "# PNG DIMENSION CANDIDATES",
+    `file: ${path.basename(filePath)}`,
+    `original: ${report.width}x${report.height}`,
+    `inflated-bytes: ${report.inflatedBytes}`,
+    "",
+    ...alternatives.map((item) => `${item.width}x${item.height} filter-score=${item.filterScore.toFixed(3)}`),
+  ];
+  const createdFiles = [writeGeneratedFile(outputRoot, `${baseName}-png-dimensions.txt`, `${lines.join("\n")}\n`)];
+  alternatives.forEach((item, index) => {
+    createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-repaired-${index + 1}-${item.width}x${item.height}.png`, patchPngDimensions(buffer, item.width, item.height)));
+  });
+  return {
+    message: `\u5df2\u6309 IDAT \u626b\u63cf\u7ebf\u7ed3\u6784\u751f\u6210 ${alternatives.length} \u4e2a PNG \u5bbd\u9ad8\u4fee\u590d\u5019\u9009\u3002`,
+    createdFiles,
+  };
+}
+
 function extractPngLsb(filePath, outputRoot) {
   const buffer = fs.readFileSync(filePath);
   const format = detectMagic(buffer).toUpperCase() || "IMAGE";
@@ -9143,8 +9532,14 @@ async function runArtifactActionInternal(actionId, filePath, outputRoot, options
   if (actionId === "extract-strings") {
     return exportStrings(filePath, baseDir);
   }
+  if (actionId === "extract-model-clues") {
+    return extractModelClues(filePath, baseDir);
+  }
   if (actionId === "extract-png-text") {
     return extractPngText(filePath, baseDir);
+  }
+  if (actionId === "repair-png-dimensions") {
+    return repairPngDimensions(filePath, baseDir);
   }
   if (actionId === "extract-png-lsb") {
     return extractPngLsb(filePath, baseDir);
@@ -9222,8 +9617,14 @@ function shouldAutoRun(actionId, artifact) {
   if (actionId === "extract-strings") {
     return artifact.family === "binary" || artifact.family === "network";
   }
+  if (actionId === "extract-model-clues") {
+    return artifact.depth === 0 && MODEL_EXTENSIONS.includes(artifact.extension);
+  }
   if (actionId === "extract-png-text" || actionId === "extract-png-lsb") {
     return artifact.depth < MAX_PIPELINE_DEPTH;
+  }
+  if (actionId === "repair-png-dimensions") {
+    return artifact.badge === "PNG" && artifact.depth === 0;
   }
   return false;
 }
@@ -9291,6 +9692,9 @@ async function buildPipelineArtifacts(rootPaths, outputRoot, options = {}) {
       } catch (error) {
         const message = error?.message || String(error);
         if (action.id === "decode-encoded-text" && message.includes("\u6ca1\u6709\u627e\u5230\u53ef\u76f4\u63a5\u89e3\u7801")) {
+          continue;
+        }
+        if (action.id === "extract-strings" && message.includes("\u6ca1\u6709\u63d0\u53d6\u5230\u53ef\u7528 strings")) {
           continue;
         }
         pipelineErrors.push({
