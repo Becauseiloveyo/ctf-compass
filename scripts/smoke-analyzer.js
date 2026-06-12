@@ -155,6 +155,40 @@ async function runPwnCase(root, elfPath, expectedFlag) {
   };
 }
 
+async function runAarch64PwnCase(root, elfPath) {
+  const outputRoot = path.join(root, "pwn-aarch64-static-out");
+  const result = await analyzeChallenge(
+    {
+      title: "synthetic AArch64 pwn smoke",
+      description: "Validate non-x86 ELF triage and lightweight return/syscall gadget detection.",
+      tags: ["pwn", "aarch64", "elf"],
+      artifacts: [elfPath],
+    },
+    outputRoot,
+  );
+  if (result.pipelineErrors && result.pipelineErrors.length) {
+    throw new Error(`case pwn-aarch64-static: unexpected pipeline errors: ${JSON.stringify(result.pipelineErrors, null, 2)}`);
+  }
+  if (result.classification?.id !== "pwn") {
+    throw new Error(`case pwn-aarch64-static: expected pwn classification, got ${result.classification?.id || "unknown"}`);
+  }
+  const generatedPaths = result.pipelineLog.flatMap((entry) => entry.createdArtifacts.map((artifact) => artifact.path));
+  const gadgetPath = generatedPaths.find((filePath) => filePath.endsWith("-rop-gadgets-lite.txt"));
+  const capabilityPath = generatedPaths.find((filePath) => filePath.endsWith("-rop-capabilities-lite.txt"));
+  if (!gadgetPath || !/svc #0/.test(fs.readFileSync(gadgetPath, "utf8")) || !/\bret\b/.test(fs.readFileSync(gadgetPath, "utf8"))) {
+    throw new Error("case pwn-aarch64-static: missing AArch64 ret/svc gadget report");
+  }
+  if (!capabilityPath || !/syscall: yes/.test(fs.readFileSync(capabilityPath, "utf8"))) {
+    throw new Error("case pwn-aarch64-static: missing AArch64 syscall capability");
+  }
+  return {
+    name: "pwn-aarch64-static",
+    status: result.solver?.status,
+    actionsRun: result.solver?.actionsRun,
+    artifacts: result.challenge?.artifactCount,
+  };
+}
+
 function markZipAsPseudoEncrypted(zipPath) {
   const buffer = fs.readFileSync(zipPath);
   let offset = 0;
@@ -390,6 +424,61 @@ function createUsbKeyboardPcap(filePath, text) {
   });
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, Buffer.concat([globalHeader, ...records]));
+  return filePath;
+}
+
+function reverseByteBits(value) {
+  let result = 0;
+  for (let bit = 0; bit < 8; bit += 1) {
+    result = (result << 1) | ((value >> bit) & 1);
+  }
+  return result;
+}
+
+function createSpiVcd(filePath, flag) {
+  const payload = Buffer.concat([
+    Buffer.from([0xde, 0xad, 0xbe, 0xef]),
+    Buffer.from(Array.from(Buffer.from(flag, "utf8"), (byte) => reverseByteBits(byte ^ 0x55))),
+  ]);
+  const bits = Array.from(payload).flatMap((byte) => byte.toString(2).padStart(8, "0").split(""));
+  const lines = [
+    "$version CTF Compass smoke $end",
+    "$timescale 1ns $end",
+    "$scope module logic $end",
+    "$var wire 1 ! CLK $end",
+    "$var wire 1 # MISO $end",
+    "$upscope $end",
+    "$enddefinitions $end",
+    "#0",
+    "0!",
+    "0#",
+  ];
+  let timestamp = 10;
+  bits.forEach((bit) => {
+    lines.push(`#${timestamp}`, `${bit}#`, `1!`);
+    timestamp += 10;
+    lines.push(`#${timestamp}`, "0!");
+    timestamp += 10;
+  });
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${lines.join("\n")}\n`);
+  return filePath;
+}
+
+function createLogicCsv(filePath, flag) {
+  const bits = Array.from(Buffer.from(flag, "utf8")).flatMap((byte) => byte.toString(2).padStart(8, "0").split(""));
+  const rows = ["IN0,IN1,IN2,IN3,Target_OUT"];
+  let oneIndex = 0;
+  let zeroIndex = 0;
+  bits.forEach((bit) => {
+    if (bit === "1") {
+      rows.push(oneIndex++ % 2 === 0 ? "1,1,0,0,0" : "0,0,1,1,0");
+    } else {
+      rows.push(zeroIndex++ % 2 === 0 ? "1,0,1,0,1" : "0,1,0,1,1");
+    }
+  });
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${rows.join("\n")}\n`);
   return filePath;
 }
 
@@ -649,6 +738,25 @@ function createPwnElf64(filePath, flag) {
   return filePath;
 }
 
+function createAarch64PwnElf(filePath) {
+  createPwnElf64(filePath, "flag{aarch64_static_smoke}");
+  const buffer = fs.readFileSync(filePath);
+  buffer.writeUInt16LE(183, 18);
+  const textStart = buffer.indexOf(Buffer.from([0x5f, 0xc3, 0x5e, 0x41, 0x5f, 0xc3]));
+  if (textStart < 0) {
+    throw new Error("unable to locate synthetic ELF text section");
+  }
+  Buffer.from([
+    0xc0, 0x03, 0x5f, 0xd6,
+    0x01, 0x00, 0x00, 0xd4,
+    0x00, 0x02, 0x1f, 0xd6,
+    0xfd, 0x7b, 0xc1, 0xa8,
+    0xc0, 0x03, 0x5f, 0xd6,
+  ]).copy(buffer, textStart);
+  fs.writeFileSync(filePath, buffer);
+  return filePath;
+}
+
 function createBrainfuckPrint(text) {
   let current = 0;
   let program = "";
@@ -834,6 +942,38 @@ async function main() {
     ),
   );
 
+  const vcdFlag = "flag{vcd_spi_signal_smoke}";
+  const vcdPath = createSpiVcd(path.join(root, "input", "logic.vcd"), vcdFlag);
+  results.push(
+    await runCase(
+      root,
+      "vcd-spi-signal",
+      {
+        title: "VCD SPI signal smoke",
+        description: "Sample a VCD bus and reverse a simple per-byte transform.",
+        tags: ["hardware", "vcd", "spi"],
+        artifacts: [vcdPath],
+      },
+      vcdFlag,
+    ),
+  );
+
+  const logicCsvFlag = "flag{logic_csv_gate_smoke}";
+  const logicCsvPath = createLogicCsv(path.join(root, "input", "logic.csv"), logicCsvFlag);
+  results.push(
+    await runCase(
+      root,
+      "logic-csv-gates",
+      {
+        title: "logic CSV gate smoke",
+        description: "Recover a bitstream from a common four-input gate expression.",
+        tags: ["hardware", "logic", "csv"],
+        artifacts: [logicCsvPath],
+      },
+      logicCsvFlag,
+    ),
+  );
+
   const wrongDimensionPng = createPngWrongDimensions(path.join(root, "input", "wrong-dimensions.png"));
   results.push(await runPngDimensionCase(root, wrongDimensionPng));
 
@@ -844,6 +984,9 @@ async function main() {
   const pwnFlag = "flag{pwn_static_smoke}";
   const pwnElfPath = createPwnElf64(path.join(root, "input", "pwn-smoke.elf"), pwnFlag);
   results.push(await runPwnCase(root, pwnElfPath, pwnFlag));
+
+  const aarch64ElfPath = createAarch64PwnElf(path.join(root, "input", "pwn-aarch64-smoke.elf"));
+  results.push(await runAarch64PwnCase(root, aarch64ElfPath));
 
   const zipCommentFlag = "flag{zip_comment_smoke}";
   const zipCommentPath = createZipWithComment(path.join(root, "input", "comment.zip"), zipCommentFlag);

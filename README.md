@@ -15,10 +15,11 @@ This project is intentionally limited to legitimate CTF training workflows:
 - automatically decode QR and 1D barcode payloads from local images and export RGB / luminance / edge / JPEG-block visualization views for image-based challenges
 - automatically detect modified PNG IHDR dimensions from IDAT scanline structure and generate repaired dimension candidates
 - automatically summarize local traffic captures, extracting HTTP requests, DNS names, TLS SNI, cookies/tokens, USB HID keyboard text, USB mouse tracks, and exported HTTP objects
+- automatically parse VCD logic-analyzer captures and binary logic CSV files, trying common clock edges, bit orders, gate expressions, bit reversal, and single-byte XOR
 - safely inspect ONNX, Safetensors, Pickle/Joblib, and checkpoint-style model attachments for metadata, tensors, operators, prompt strings, and unsafe deserialization indicators without executing model content
 - automatically extract PDF metadata, XMP packets, readable Flate streams, and OOXML/Office package contents for recursive local analysis
 - automatically inspect WAV metadata, PCM LSB candidates, tone / morse hints, and waveform / spectrogram views for audio-based local challenges
-- automatically inspect ELF / PE / APK attachments, extracting headers, sections, imports / exports, symbol / relocation summaries, interpreter / shared-library hints, ELF roles, GNU Build IDs and GLIBC versions, checksec-lite protections, risky Pwn imports, I/O/network/heap/sandbox profiles, prioritized Pwn paths, short x86/x64 ROP gadget candidates, manifest strings, DEX method indexes, Android string-pool resources, and unpacked package contents for recursive local analysis
+- automatically inspect ELF / PE / APK attachments, extracting headers, sections, imports / exports, symbol / relocation summaries, interpreter / shared-library hints, ELF roles, GNU Build IDs and GLIBC versions, checksec-lite protections, risky Pwn imports, I/O/network/heap/sandbox profiles, prioritized Pwn paths, short x86/x64 ROP gadget candidates, lightweight AArch64/ARM/MIPS/RISC-V return and syscall gadgets, manifest strings, DEX method indexes, Android string-pool resources, and unpacked package contents for recursive local analysis
 - run a bundled local toolbox on each root artifact, covering strings-lite, binwalk-lite, ciphey-lite, zsteg-lite, tshark-lite, and rabin2/exif-lite style checks without external downloads
 - detect local professional CTF tools on PATH and auto-run safe adapters instead of showing placeholder guidance
 - run installed tool adapters for ExifTool, binwalk, zsteg, TShark, Ciphey, rabin2, jadx, and apktool, then import generated output back into the recursive solver
@@ -39,9 +40,9 @@ This project does **not** target real-world systems and should not be used for u
 - `crypto`: simple encoded content discovery, category hints, and workflow guidance
 - `web`: challenge metadata and traffic-based session/auth clue routing
 - `reverse`: ELF / PE / APK structure extraction, strings/import/export/symbol triage, and flow hints
-- `pwn`: ELF checksec-lite, risky import/function surface, local/network I/O and seccomp/alarm/heap profiles, writable/executable/RWX/staging memory surfaces, interesting menu/format/shell strings, prioritized ret2win/overflow/format-string/GOT/ORW/ROP hypotheses, short x86/x64 ROP gadget candidates, argument-control/syscall/stack-pivot capability summaries, loader/shared-library clues, and protection-oriented next steps
+- `pwn`: ELF checksec-lite, risky import/function surface, local/network I/O and seccomp/alarm/heap profiles, writable/executable/RWX/staging memory surfaces, interesting menu/format/shell strings, prioritized ret2win/overflow/format-string/GOT/ORW/ROP hypotheses, x86/x64 ROP candidates plus lightweight AArch64/ARM/MIPS/RISC-V gadget scans, argument-control/syscall/stack-pivot capability summaries, loader/shared-library clues, and protection-oriented next steps
 - `forensic`: pcap/pcapng session extraction, USB HID reconstruction, archive recursion, document extraction, and hidden-artifact oriented workflow hints
-- `misc`: image/GIF/video stego, MP4 container repair, and mixed-artifact triage with local auto-processing where deterministic
+- `misc`: image/GIF/video stego, MP4 container repair, VCD/SPI and logic-CSV recovery, and mixed-artifact triage with local auto-processing where deterministic
 
 ## Tool-Backed Workflow
 
@@ -99,7 +100,7 @@ npm run dist:dir
 
 The unpacked Windows app will be written to `release/win-unpacked/`.
 
-A downloadable zip can be created from the unpacked build. The current local package name is `release/CTF-Compass-0.5.2-win-x64.zip`.
+A downloadable zip can be created from the unpacked build. The current local package name is `release/CTF-Compass-0.5.3-win-x64.zip`.
 
 ## GitHub Releases
 

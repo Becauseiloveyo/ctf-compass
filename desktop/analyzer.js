@@ -203,6 +203,12 @@ const COPY = {
 
 const BUNDLED_TOOL_CAPABILITIES = [
   {
+    id: "signal-lite",
+    label: "内置信号分析器",
+    replaces: "PulseView / VCDVCD basic",
+    purpose: "解析 VCD 逻辑波形与二值 CSV，自动尝试 SPI 边沿采样、常见位序、门电路组合、位反转和单字节 XOR。",
+  },
+  {
     id: "strings-lite",
     label: "内置 strings-lite",
     replaces: "strings",
@@ -256,13 +262,18 @@ const CATEGORY_RULES = {
   crypto: ["rsa", "aes", "xor", "cipher", "nonce", "modulus", "prime", "decrypt", "encrypt", "base64", "hex"],
   web: ["http", "https", "cookie", "session", "jwt", "request", "route", "upload", "template", "csrf", "xss", "sql", "login"],
   reverse: ["binary", "elf", "pe32", "exe", "dll", "ghidra", "ida", "strings", "disasm", "symbol", "apk", "java", "onnx", "safetensors", "model reverse"],
-  pwn: ["overflow", "heap", "rop", "libc", "canary", "format string", "uaf", "fastbin", "tcache", "stack smashing"],
+  pwn: ["pwn", "overflow", "heap", "rop", "libc", "canary", "format string", "uaf", "fastbin", "tcache", "stack smashing"],
   forensic: ["pcap", "pcapng", "traffic", "dns", "http", "memory", "disk", "metadata", "artifact", "timeline", "capture"],
   misc: [
     "stego",
     "steganography",
     "puzzle",
     "logic",
+    "hardware",
+    "vcd",
+    "spi",
+    "uart",
+    "logic analyzer",
     "encoding",
     "qr",
     "audio",
@@ -657,7 +668,7 @@ function scoreDecodedText(text) {
   const printable = (text.match(/[\x20-\x7e]/g) || []).length / text.length;
   const spaces = (text.match(/\s/g) || []).length;
   const common = (text.match(/[etaoinshrdlu]/gi) || []).length;
-  const flagBonus = /flag\{|ctf\{|key\{/i.test(text) ? 12 : 0;
+  const flagBonus = findFlagCandidates(text, "decoded text").length ? 12 : 0;
   const asciiPenalty = (text.match(/[^\x09\x0a\x0d\x20-\x7e]/g) || []).length * 0.5;
   return printable * 6 + spaces * 0.08 + common * 0.04 + flagBonus - asciiPenalty;
 }
@@ -738,7 +749,7 @@ function pushDecodedResult(bucket, item) {
 
   const score = typeof item.score === "number" ? item.score : scoreDecodedText(value);
   const strict = Boolean(item.strict);
-  const looksLikeFlag = KNOWN_FLAG_PREFIX.test(value) || LOOSE_FLAG_PREFIX.test(value);
+  const looksLikeFlag = findFlagCandidates(value, "decoded candidate").length > 0;
   const looksLikeNaturalText = NATURAL_TEXT_HINT.test(value) || /\s/.test(value);
 
   if (strict && !looksLikeFlag && (!looksLikeNaturalText || score < 8)) {
@@ -1725,6 +1736,284 @@ function smartDecodeTextContent(buffer) {
     .map(({ type, label, value }) => ({ type, label, value }));
 }
 
+function reverseByteBits(value) {
+  let result = 0;
+  for (let bit = 0; bit < 8; bit += 1) {
+    result = (result << 1) | ((value >> bit) & 1);
+  }
+  return result;
+}
+
+function signalBitsToBuffer(bits, offset = 0, leastSignificantBitFirst = false) {
+  const cleaned = String(bits || "").replace(/[^01]/g, "");
+  const bytes = [];
+  for (let index = offset; index + 8 <= cleaned.length && bytes.length < MAX_TEXT_BYTES; index += 8) {
+    const chunk = cleaned.slice(index, index + 8);
+    bytes.push(parseInt(leastSignificantBitFirst ? Array.from(chunk).reverse().join("") : chunk, 2));
+  }
+  return Buffer.from(bytes);
+}
+
+function collectSignalBufferDecodes(buffer, label, bucket) {
+  if (!buffer || buffer.length < 4) {
+    return;
+  }
+  collectTextVariantsFromBuffer(buffer, label, bucket);
+  const reversed = Buffer.from(Array.from(buffer, reverseByteBits));
+  collectTextVariantsFromBuffer(reversed, `${label} -> bit-reverse`, bucket);
+}
+
+function rankSignalCandidates(candidates, limit = 40) {
+  const deduped = new Map();
+  candidates.forEach((item) => {
+    const value = String(item.value || "").trim();
+    if (!value) {
+      return;
+    }
+    const key = `${item.label}@@${value}`;
+    const current = deduped.get(key);
+    if (!current || (item.score || 0) > (current.score || 0)) {
+      deduped.set(key, item);
+    }
+  });
+  return Array.from(deduped.values())
+    .sort((left, right) => (right.score || 0) - (left.score || 0))
+    .slice(0, limit)
+    .map(({ type, label, value }) => ({ type, label, value }));
+}
+
+function parseVcdSignals(text) {
+  const signals = new Map();
+  const definitionPattern = /\$var\s+\S+\s+(\d+)\s+(\S+)\s+(.+?)\s+\$end/g;
+  for (const match of String(text || "").matchAll(definitionPattern)) {
+    signals.set(match[2], {
+      symbol: match[2],
+      width: Number(match[1]),
+      name: match[3].trim(),
+      transitions: [],
+    });
+  }
+
+  let timestamp = 0;
+  String(text || "")
+    .split(/\r?\n/)
+    .forEach((rawLine) => {
+      const line = rawLine.trim();
+      if (!line) {
+        return;
+      }
+      if (line.startsWith("#")) {
+        const parsed = Number(line.slice(1));
+        if (Number.isFinite(parsed)) {
+          timestamp = parsed;
+        }
+        return;
+      }
+      const scalar = /^([01xXzZ])(.+)$/.exec(line);
+      if (scalar && signals.has(scalar[2])) {
+        signals.get(scalar[2]).transitions.push({ time: timestamp, value: scalar[1].toLowerCase() });
+        return;
+      }
+      const vector = /^b([01xXzZ]+)\s+(\S+)$/.exec(line);
+      if (vector && signals.has(vector[2])) {
+        signals.get(vector[2]).transitions.push({ time: timestamp, value: vector[1].toLowerCase() });
+      }
+    });
+
+  return Array.from(signals.values()).filter((signal) => signal.transitions.length);
+}
+
+function getVcdValueAt(transitions, timestamp) {
+  let low = 0;
+  let high = transitions.length - 1;
+  let value = "0";
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    if (transitions[middle].time <= timestamp) {
+      value = transitions[middle].value;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return value;
+}
+
+function analyzeVcdText(text) {
+  const signals = parseVcdSignals(text);
+  const scalarSignals = signals.filter((signal) => signal.width === 1 && signal.transitions.length >= 2);
+  const clockCandidates = scalarSignals
+    .filter((signal) => signal.transitions.length >= 8)
+    .sort((left, right) => right.transitions.length - left.transitions.length)
+    .slice(0, 5);
+  const dataCandidates = scalarSignals
+    .sort((left, right) => right.transitions.length - left.transitions.length)
+    .slice(0, 14);
+  const candidates = [];
+  const samples = [];
+
+  clockCandidates.forEach((clock) => {
+    dataCandidates.forEach((data) => {
+      if (clock.symbol === data.symbol) {
+        return;
+      }
+      ["rising", "falling"].forEach((edge) => {
+        const bits = [];
+        let previous = clock.transitions[0]?.value || "0";
+        clock.transitions.slice(1).forEach((transition) => {
+          const isEdge = edge === "rising" ? previous === "0" && transition.value === "1" : previous === "1" && transition.value === "0";
+          if (isEdge) {
+            const value = getVcdValueAt(data.transitions, transition.time);
+            if (value === "0" || value === "1") {
+              bits.push(value);
+            }
+          }
+          previous = transition.value;
+        });
+        if (bits.length < 32) {
+          return;
+        }
+        const bitString = bits.join("");
+        samples.push({ clock: clock.name, data: data.name, edge, bitCount: bits.length });
+        for (let offset = 0; offset < 8 && offset + 32 <= bitString.length; offset += 1) {
+          collectSignalBufferDecodes(signalBitsToBuffer(bitString, offset, false), `${clock.name}/${data.name} ${edge} MSB offset ${offset}`, candidates);
+          collectSignalBufferDecodes(signalBitsToBuffer(bitString, offset, true), `${clock.name}/${data.name} ${edge} LSB offset ${offset}`, candidates);
+        }
+      });
+    });
+  });
+
+  return {
+    signalCount: signals.length,
+    samples,
+    candidates: rankSignalCandidates(candidates),
+  };
+}
+
+function detectCsvDelimiter(line) {
+  return [",", ";", "\t"].sort((left, right) => line.split(right).length - line.split(left).length)[0];
+}
+
+function applyLogicOperator(left, right, operator) {
+  if (operator === "&") return left & right;
+  if (operator === "|") return left | right;
+  return left ^ right;
+}
+
+function analyzeBinaryCsv(text) {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length < 5) {
+    return null;
+  }
+  const delimiter = detectCsvDelimiter(lines[0]);
+  const headers = lines[0].split(delimiter).map((item, index) => item.trim() || `column_${index + 1}`);
+  const rows = lines
+    .slice(1, 20001)
+    .map((line) => line.split(delimiter).map((item) => item.trim()))
+    .filter((row) => row.length === headers.length);
+  const binaryIndexes = headers
+    .map((_header, index) => index)
+    .filter((index) => rows.length >= 4 && rows.every((row) => row[index] === "0" || row[index] === "1"));
+  if (binaryIndexes.length < 1) {
+    return null;
+  }
+
+  const formulas = new Map();
+  const addFormula = (label, evaluate) => {
+    const bits = rows.map((row) => String(evaluate(row) & 1)).join("");
+    if (bits.length >= 32 && !formulas.has(bits)) {
+      formulas.set(bits, label);
+    }
+  };
+  binaryIndexes.slice(0, 10).forEach((index) => {
+    addFormula(headers[index], (row) => Number(row[index]));
+    addFormula(`NOT ${headers[index]}`, (row) => Number(row[index]) ^ 1);
+  });
+  binaryIndexes.slice(0, 8).forEach((left, leftPosition) => {
+    binaryIndexes.slice(leftPosition + 1, 8).forEach((right) => {
+      ["&", "|", "^"].forEach((operator) => {
+        addFormula(`${headers[left]} ${operator} ${headers[right]}`, (row) => applyLogicOperator(Number(row[left]), Number(row[right]), operator));
+      });
+    });
+  });
+
+  const inputIndexes = binaryIndexes.filter((index) => !/(?:out|output|result|target|expected|label)/i.test(headers[index])).slice(0, 4);
+  if (inputIndexes.length === 4) {
+    const pairings = [
+      [inputIndexes[0], inputIndexes[1], inputIndexes[2], inputIndexes[3]],
+      [inputIndexes[0], inputIndexes[2], inputIndexes[1], inputIndexes[3]],
+      [inputIndexes[0], inputIndexes[3], inputIndexes[1], inputIndexes[2]],
+    ];
+    pairings.forEach(([a, b, c, d]) => {
+      ["&", "|", "^"].forEach((firstOperator) => {
+        ["&", "|", "^"].forEach((secondOperator) => {
+          ["&", "|", "^"].forEach((combineOperator) => {
+            const label = `(${headers[a]} ${firstOperator} ${headers[b]}) ${combineOperator} (${headers[c]} ${secondOperator} ${headers[d]})`;
+            addFormula(label, (row) =>
+              applyLogicOperator(
+                applyLogicOperator(Number(row[a]), Number(row[b]), firstOperator),
+                applyLogicOperator(Number(row[c]), Number(row[d]), secondOperator),
+                combineOperator,
+              ),
+            );
+          });
+        });
+      });
+    });
+  }
+
+  const candidates = [];
+  formulas.forEach((label, bits) => {
+    collectBitsAsText(bits, `CSV logic ${label}`, candidates);
+    collectBitsAsText(Array.from(bits, (bit) => (bit === "0" ? "1" : "0")).join(""), `CSV logic NOT (${label})`, candidates);
+    collectSignalBufferDecodes(signalBitsToBuffer(bits), `CSV logic ${label}`, candidates);
+  });
+  return {
+    headers,
+    rowCount: rows.length,
+    binaryColumns: binaryIndexes.map((index) => headers[index]),
+    formulaCount: formulas.size,
+    candidates: rankSignalCandidates(candidates),
+  };
+}
+
+function analyzeSignalArtifact(buffer, extension) {
+  const text = decodeBufferAsText(buffer);
+  if (extension === ".vcd" || /\$enddefinitions\s+\$end/i.test(text)) {
+    return { kind: "vcd", ...analyzeVcdText(text) };
+  }
+  if (extension === ".csv") {
+    const report = analyzeBinaryCsv(text);
+    return report ? { kind: "logic-csv", ...report } : null;
+  }
+  return null;
+}
+
+function buildSignalReport(fileName, report) {
+  const lines = ["# SIGNAL ANALYSIS REPORT", `file: ${fileName}`, `kind: ${report.kind}`, ""];
+  if (report.kind === "vcd") {
+    lines.push(`signals: ${report.signalCount}`, `sampled-buses: ${report.samples.length}`, "");
+    appendReportSection(
+      lines,
+      "sampled buses",
+      report.samples.slice(0, 80).map((item) => `${item.clock} -> ${item.data} ${item.edge} bits=${item.bitCount}`),
+      "(none)",
+    );
+  } else {
+    lines.push(`rows: ${report.rowCount}`, `binary-columns: ${report.binaryColumns.join(", ")}`, `logic-formulas: ${report.formulaCount}`, "");
+  }
+  appendReportSection(
+    lines,
+    "decoded candidates",
+    report.candidates.map((item) => `${item.label}\n${item.value}`),
+    "(none)",
+  );
+  return `${lines.join("\n")}\n`;
+}
+
 function detectEmbeddedPayloads(buffer, offset = 128) {
   const hits = [];
   for (const signature of EMBEDDED_SIGNATURES) {
@@ -1775,6 +2064,7 @@ function isLikelyTextExtension(extension) {
     ".md",
     ".log",
     ".csv",
+    ".vcd",
     ".json",
     ".yaml",
     ".yml",
@@ -1968,9 +2258,10 @@ function detectFamily(filePath, sample) {
 }
 
 function containsPlaceholderFlag(text) {
-  return /(?:fake|dummy|placeholder|example|sample|test)[-_ ]?flag|flag[-_ ]?(?:fake|dummy|placeholder|example|sample|test)/i.test(
-    String(text || ""),
-  );
+  const normalized = String(text || "")
+    .replace(/4/g, "a")
+    .replace(/3/g, "e");
+  return /(?:fake|dummy|placeholder|example|sample|test)[-_ ]?flag|flag[-_ ]?(?:fake|dummy|placeholder|example|sample|test)/i.test(normalized);
 }
 
 function findFlagCandidates(text, source) {
@@ -1988,6 +2279,9 @@ function findFlagCandidates(text, source) {
         continue;
       }
       if (containsPlaceholderFlag(value)) {
+        continue;
+      }
+      if (/[^\x20-\x7e]/.test(value)) {
         continue;
       }
       if (/^NPF_\{[0-9a-f-]{32,40}\}$/i.test(value) || /^[a-z0-9_]{2,16}\{[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\}$/i.test(value)) {
@@ -4607,28 +4901,29 @@ function collectElfPwnSurface(buffer, sections, symbolTables, relocations, progr
   const gadgetCounts = new Map();
   const architecture64 = context.machine === 62;
   const architecture32 = context.machine === 3;
+  const registerNames = architecture64
+    ? ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi"]
+    : architecture32
+      ? ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"]
+      : [];
+  const addGadget = (label, section, sectionFileOffset, fileIndex, length) => {
+    gadgetCounts.set(label, (gadgetCounts.get(label) || 0) + 1);
+    if (gadgets.length >= 64) {
+      return;
+    }
+    const sectionAddress = typeof section.address === "bigint" ? section.address : BigInt(section.address || 0);
+    const relativeOffset = fileIndex - sectionFileOffset;
+    gadgets.push({
+      label,
+      section: section.name,
+      offset: relativeOffset,
+      fileOffset: fileIndex,
+      address: sectionAddress + BigInt(relativeOffset),
+      size: length,
+    });
+  };
   if (architecture64 || architecture32) {
-    const registerNames = architecture64
-      ? ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi"]
-      : ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
     const extendedRegisterNames = ["r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"];
-    const addGadget = (label, section, sectionFileOffset, fileIndex, length) => {
-      gadgetCounts.set(label, (gadgetCounts.get(label) || 0) + 1);
-      if (gadgets.length >= 64) {
-        return;
-      }
-      const sectionAddress = typeof section.address === "bigint" ? section.address : BigInt(section.address || 0);
-      const relativeOffset = fileIndex - sectionFileOffset;
-      gadgets.push({
-        label,
-        section: section.name,
-        offset: relativeOffset,
-        fileOffset: fileIndex,
-        address: sectionAddress + BigInt(relativeOffset),
-        size: length,
-      });
-    };
-
     sections
       .filter((section) => (section.flags & 4n) !== 0n)
       .forEach((section) => {
@@ -4706,16 +5001,50 @@ function collectElfPwnSurface(buffer, sections, symbolTables, relocations, progr
         }
       });
   }
+  if ([8, 40, 183, 243].includes(context.machine)) {
+    sections
+      .filter((section) => (section.flags & 4n) !== 0n)
+      .forEach((section) => {
+        const fileOffset = toSafeNumber(section.offset);
+        const size = toSafeNumber(section.size);
+        if (fileOffset === null || size === null || fileOffset < 0 || fileOffset + size > buffer.length) {
+          return;
+        }
+        const end = fileOffset + size;
+        for (let index = fileOffset; index + 4 <= end; index += 4) {
+          const word = context.littleEndian ? buffer.readUInt32LE(index) : buffer.readUInt32BE(index);
+          if (context.machine === 183) {
+            if (word === 0xd65f03c0) addGadget("ret", section, fileOffset, index, 4);
+            if (((word & 0xffe0001f) >>> 0) === 0xd4000001) addGadget("svc #0", section, fileOffset, index, 4);
+            if (((word & 0xfffffc1f) >>> 0) === 0xd61f0000) addGadget(`br x${(word >>> 5) & 31}`, section, fileOffset, index, 4);
+            if (((word & 0xfffffc1f) >>> 0) === 0xd63f0000) addGadget(`blr x${(word >>> 5) & 31}`, section, fileOffset, index, 4);
+            if (word === 0xa8c17bfd && index + 8 <= end) {
+              const next = context.littleEndian ? buffer.readUInt32LE(index + 4) : buffer.readUInt32BE(index + 4);
+              if (next === 0xd65f03c0) addGadget("ldp x29, x30, [sp], #16; ret", section, fileOffset, index, 8);
+            }
+          } else if (context.machine === 40) {
+            if (word === 0xe12fff1e) addGadget("bx lr", section, fileOffset, index, 4);
+            if (((word & 0xff000000) >>> 0) === 0xef000000) addGadget("svc #0", section, fileOffset, index, 4);
+          } else if (context.machine === 243) {
+            if (word === 0x00008067) addGadget("ret", section, fileOffset, index, 4);
+            if (word === 0x00000073) addGadget("ecall", section, fileOffset, index, 4);
+          } else if (context.machine === 8) {
+            if (word === 0x03e00008) addGadget("jr ra", section, fileOffset, index, 4);
+            if (((word & 0xfc00003f) >>> 0) === 0x0000000c) addGadget("mips syscall", section, fileOffset, index, 4);
+          }
+        }
+      });
+  }
   const gadgetLabels = Array.from(gadgetCounts.keys());
   const hasGadget = (pattern) => gadgetLabels.some((label) => pattern.test(label));
   const gadgetCapabilities = {
     argumentControl: architecture64
       ? ["rdi", "rsi", "rdx", "rcx", "r8", "r9"].filter((register) => hasGadget(new RegExp(`(?:^|; )pop ${register}(?:;|$)`)))
       : registerNames.filter((register) => hasGadget(new RegExp(`(?:^|; )pop ${register}(?:;|$)`))),
-    syscall: hasGadget(/^(?:syscall|int 0x80)(?:; ret)?$/),
+    syscall: hasGadget(/^(?:syscall|int 0x80|svc #0|ecall|mips syscall)(?:; ret)?$/),
     stackPivot: hasGadget(/^(?:leave; ret|pop (?:rsp|esp); ret|xchg rsp, rax; ret|jmp (?:rsp|esp)|call (?:rsp|esp))$/),
     stackAdjust: hasGadget(/^add rsp, \d+; ret$/),
-    alignmentRet: gadgetCounts.has("ret"),
+    alignmentRet: gadgetCounts.has("ret") || gadgetCounts.has("bx lr") || gadgetCounts.has("jr ra"),
   };
   if ((ioProfile.constraints.includes("seccomp") || ioProfile.constraints.includes("prctl")) && gadgetCapabilities.syscall) {
     addHypothesis(
@@ -4972,6 +5301,7 @@ function parseElfBinary(buffer) {
     role,
     buildId,
     glibcVersions,
+    littleEndian,
   });
 
   return {
@@ -5850,6 +6180,14 @@ async function buildArtifactSignals(filePath) {
   let audioSignal = null;
   let mp4Report = null;
   let pngDimensionReport = null;
+  let signalReport = null;
+  if ([".vcd", ".csv"].includes(extension)) {
+    try {
+      signalReport = analyzeSignalArtifact(buffer, extension);
+    } catch (_error) {
+      signalReport = null;
+    }
+  }
   if (artifact.family === "image" && artifact.badge === "PNG") {
     try {
       pngDimensionReport = analyzePngDimensionCandidates(buffer);
@@ -6391,6 +6729,33 @@ async function buildArtifactSignals(filePath) {
   } else if (artifact.family === "text") {
     artifact.summary = "\u6587\u672c\u7c7b\u9644\u4ef6\uff0c\u4f18\u5148\u68c0\u67e5 flag \u6837\u5f0f\u3001base64\u3001hex\u3001URL \u548c\u9690\u85cf\u63d0\u793a\u3002";
     artifact.keywords.push("text");
+    if (signalReport) {
+      artifact.summary =
+        signalReport.kind === "vcd"
+          ? "VCD 逻辑分析仪波形，可自动尝试常见时钟边沿、位序和轻量编码变换。"
+          : "二值逻辑 CSV，可自动提取列位流并尝试常见门电路组合。";
+      artifact.keywords.push("hardware", "logic", signalReport.kind, signalReport.kind === "vcd" ? "spi" : "csv");
+      artifact.highlights.push(
+        signalReport.kind === "vcd"
+          ? `VCD 信号 ${signalReport.signalCount} 个，已尝试 ${signalReport.samples.length} 组边沿采样。`
+          : `逻辑 CSV ${signalReport.rowCount} 行，已尝试 ${signalReport.formulaCount} 个位流/门电路表达式。`,
+      );
+      if (signalReport.candidates.length) {
+        artifact.highlights.push(`信号分析命中 ${signalReport.candidates.length} 个可读候选。`);
+      }
+      const signalFlags = signalReport.candidates.flatMap((item) => findFlagCandidates(item.value, `${artifact.name} (${item.label})`));
+      artifact.flagCandidates = dedupeStrings(
+        artifact.flagCandidates.map((item) => `${item.value}@@${item.source}`).concat(signalFlags.map((item) => `${item.value}@@${item.source}`)),
+      ).map((entry) => {
+        const [value, source] = entry.split("@@");
+        return { value, source };
+      });
+      artifact.actions.push({
+        id: "analyze-signal-data",
+        label: "解析逻辑信号",
+      });
+      artifact.suggestions.push("优先核对时钟边沿、数据线、位序和门电路表达式；自动结果会保留来源公式。");
+    }
     if (encodedSegments.base64.length) {
       artifact.highlights.push(`\u53d1\u73b0 ${encodedSegments.base64.length} \u6bb5\u53ef\u7591 Base64 \u5185\u5bb9\u3002`);
       artifact.keywords.push("base64", "encoding");
@@ -7538,6 +7903,28 @@ function decodeEncodedText(filePath, outputRoot) {
   const outPath = writeGeneratedFile(outputRoot, generatedName, sections.join("\n"));
   return {
     message: "\u5df2\u5c06\u89e3\u7801\u5185\u5bb9\u8f93\u51fa\u4e3a\u6587\u672c\u6587\u4ef6\u3002",
+    createdFiles: [outPath],
+  };
+}
+
+function analyzeSignalData(filePath, outputRoot) {
+  const extension = path.extname(filePath).toLowerCase();
+  const stat = fs.statSync(filePath);
+  const buffer = readSample(filePath, Math.min(stat.size, MAX_TEXT_BYTES * 4)).buffer;
+  const report = analyzeSignalArtifact(buffer, extension);
+  if (!report) {
+    throw new Error("没有识别到可解析的 VCD 波形或二值逻辑 CSV。");
+  }
+  const outPath = writeGeneratedFile(
+    outputRoot,
+    `${sanitizeSegment(path.parse(filePath).name)}-signal-analysis.txt`,
+    buildSignalReport(path.basename(filePath), report),
+  );
+  return {
+    message:
+      report.kind === "vcd"
+        ? "已解析 VCD 信号并自动尝试时钟边沿、位序、位反转和单字节 XOR。"
+        : "已解析二值 CSV 并自动尝试列位流与常见门电路组合。",
     createdFiles: [outPath],
   };
 }
@@ -9526,6 +9913,9 @@ async function runArtifactActionInternal(actionId, filePath, outputRoot, options
   if (actionId === "decode-encoded-text") {
     return decodeEncodedText(filePath, baseDir);
   }
+  if (actionId === "analyze-signal-data") {
+    return analyzeSignalData(filePath, baseDir);
+  }
   if (actionId === "extract-traffic-sessions") {
     return extractTrafficSessions(filePath, baseDir);
   }
@@ -9610,6 +10000,9 @@ function shouldAutoRun(actionId, artifact) {
         artifact.name,
       );
     return !structuredReport && artifact.depth < MAX_PIPELINE_DEPTH && !(artifact.flagCandidates || []).length;
+  }
+  if (actionId === "analyze-signal-data") {
+    return artifact.depth === 0 && [".vcd", ".csv"].includes(artifact.extension);
   }
   if (actionId === "extract-traffic-sessions") {
     return artifact.family === "network" && artifact.depth === 0;

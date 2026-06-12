@@ -6,6 +6,7 @@ This document records validation against recently released public CTF challenges
 
 - [UofTCTF 2026 public challenges](https://github.com/UofTCTF/uoftctf-2026-chals-public)
 - [Jeanne d'Hack CTF 2026](https://github.com/JeanneD-Hack-CTF/JeanneD-Hack-CTF-2026)
+- [Fennec CTF 2026 public challenges](https://github.com/Underr00ted/Fennec-CTF-2026-challenges)
 
 ## Results
 
@@ -16,6 +17,9 @@ This document records validation against recently released public CTF challenges
 | Jeanne d'Hack: Blind Distribution | Misc / MP4 repair | Partial, repair completed | Detects unsorted `stco`/`co64` chunk offsets, sorts them, and exports a repaired MP4. |
 | UofTCTF: babybof | Pwn | Partial static triage | Unpacks the challenge, identifies ELF64 x86-64, partial RELRO, NX, no PIE, no canary, risky `gets`/`printf`/`system`, and prioritizes ret2win/stack-overflow paths. |
 | UofTCTF: baby-exfil | Forensic / pcapng | Partial | Extracts HTTP, DNS, TLS SNI, session, and object clues. Full challenge-specific exfil reconstruction remains a manual gap. |
+| Fennec CTF: EE | Hardware / VCD / SPI | Solved | Parses the VCD, identifies useful clock/data pairs, samples both edges and bit orders, applies bit reversal and single-byte XOR, and recovers the published flag. |
+| Fennec CTF: Ch1p | Hardware / logic CSV | Solved | Detects binary columns, tests common gate expressions and bit orders, and recovers the published flag from the resulting bitstream. |
+| Fennec CTF: ARMy | Pwn / AArch64 | Partial static triage | Identifies ELF64 AArch64, protections and fixed-address/GOT paths, suppresses the embedded fake flag, and exports AArch64 `ret`, branch, and `svc` gadget candidates. |
 
 ## Improvements Driven By These Challenges
 
@@ -25,6 +29,10 @@ This document records validation against recently released public CTF challenges
 - Stopped treating coincidental media/packet magic bytes as appended archives.
 - Filtered obvious fake, placeholder, UUID, and transformed-placeholder flag candidates.
 - Stopped reporting routine "no decodable text found" outcomes as failed tasks.
+- Added VCD clock/data edge sampling with common bit-order and byte-transform recovery.
+- Added binary logic-CSV gate-expression enumeration.
+- Fixed non-x86 ELF Pwn analysis and added lightweight AArch64, ARM, MIPS, and RISC-V return/syscall gadget scanning.
+- Expanded leetspeak fake-flag filtering so obvious decoys do not mark a challenge solved.
 
 ## Reproduction Notes
 
