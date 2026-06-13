@@ -337,7 +337,7 @@ const CATEGORY_RULES = {
   ],
 };
 
-const KNOWN_FLAG_PREFIX = /\b(?:flag|ctf|key|answer|ductf|picoCTF|moectf|actf|hitcon|sekai|balsn|uiuctf|n1ctf)\{/i;
+const KNOWN_FLAG_PREFIX = /\b(?:flag|ctf|key|answer|ductf|uoftctf|picoCTF|moectf|actf|hitcon|sekai|balsn|uiuctf|n1ctf)\{/i;
 const LOOSE_FLAG_PREFIX = /\bflag\s*[:=_-]\s*[a-zA-Z0-9_\/+=-]{6,160}\b/i;
 const LOOSE_FLAG_PREFIX_GLOBAL = /\bflag\s*[:=_-]\s*[a-zA-Z0-9_\/+=-]{6,160}\b/gi;
 const NATURAL_TEXT_HINT = /\b(?:the|this|that|flag|password|secret|cookie|session|token|login|http|https|user|admin|hello|world|image|file|data|text)\b/i;
@@ -7172,6 +7172,319 @@ function buildForensicReport(fileName, report) {
   return `${lines.join("\n")}\n`;
 }
 
+function bigintGcd(left, right) {
+  let a = left < 0n ? -left : left;
+  let b = right < 0n ? -right : right;
+  while (b) {
+    [a, b] = [b, a % b];
+  }
+  return a;
+}
+
+function bigintExtendedGcd(a, b) {
+  let [oldR, r] = [a, b];
+  let [oldS, s] = [1n, 0n];
+  while (r) {
+    const quotient = oldR / r;
+    [oldR, r] = [r, oldR - quotient * r];
+    [oldS, s] = [s, oldS - quotient * s];
+  }
+  return { gcd: oldR, x: oldS };
+}
+
+function bigintModInverse(value, modulus) {
+  const result = bigintExtendedGcd(((value % modulus) + modulus) % modulus, modulus);
+  if (result.gcd !== 1n) {
+    return null;
+  }
+  return ((result.x % modulus) + modulus) % modulus;
+}
+
+function bigintModPow(base, exponent, modulus) {
+  if (modulus <= 0n || exponent < 0n) {
+    return null;
+  }
+  let result = 1n;
+  let value = ((base % modulus) + modulus) % modulus;
+  let power = exponent;
+  while (power) {
+    if (power & 1n) {
+      result = (result * value) % modulus;
+    }
+    value = (value * value) % modulus;
+    power >>= 1n;
+  }
+  return result;
+}
+
+function bigintSignedModPow(base, exponent, modulus) {
+  if (exponent >= 0n) {
+    return bigintModPow(base, exponent, modulus);
+  }
+  const inverse = bigintModInverse(base, modulus);
+  return inverse === null ? null : bigintModPow(inverse, -exponent, modulus);
+}
+
+function bigintNthRoot(value, degree) {
+  if (value < 0n || degree < 2) {
+    return null;
+  }
+  if (value < 2n) {
+    return value;
+  }
+  const exponent = BigInt(degree);
+  let low = 1n;
+  let high = 2n;
+  while (high ** exponent <= value) {
+    high *= 2n;
+  }
+  while (high - low > 1n) {
+    const middle = (low + high) >> 1n;
+    if (middle ** exponent <= value) {
+      low = middle;
+    } else {
+      high = middle;
+    }
+  }
+  return low;
+}
+
+function bigintToBuffer(value) {
+  if (value < 0n) {
+    return Buffer.alloc(0);
+  }
+  let hex = value.toString(16);
+  if (hex.length % 2) {
+    hex = `0${hex}`;
+  }
+  return Buffer.from(hex, "hex");
+}
+
+function parseRsaAssignments(text) {
+  const assignments = new Map();
+  const pattern = /\b([A-Za-z][A-Za-z0-9_]*)\s*[:=]\s*(0x[0-9a-fA-F]+|\d{1,10000})\b/g;
+  for (const match of String(text || "").matchAll(pattern)) {
+    const name = match[1].toLowerCase();
+    if (!/^(?:n|e|d|c|ct|ciphertext|p|q|phi|modulus)\d*$/.test(name)) {
+      continue;
+    }
+    try {
+      assignments.set(name, BigInt(match[2]));
+    } catch (_error) {
+      // Ignore malformed or excessively large numeric fields.
+    }
+  }
+  return assignments;
+}
+
+function factorRsaFromPrivateExponent(n, e, d) {
+  const k = e * d - 1n;
+  if (k <= 0n || (k & 1n)) {
+    return null;
+  }
+  let odd = k;
+  let twos = 0;
+  while ((odd & 1n) === 0n) {
+    odd >>= 1n;
+    twos += 1;
+  }
+  for (const base of [2n, 3n, 5n, 7n, 11n, 13n, 17n, 19n, 23n, 29n, 31n, 37n, 41n]) {
+    if (base >= n) {
+      continue;
+    }
+    let x = bigintModPow(base, odd, n);
+    if (x === 1n || x === n - 1n) {
+      continue;
+    }
+    for (let round = 1; round <= twos; round += 1) {
+      const y = (x * x) % n;
+      if (y === 1n) {
+        const factor = bigintGcd(x - 1n, n);
+        if (factor > 1n && factor < n) {
+          return [factor, n / factor];
+        }
+        break;
+      }
+      if (y === n - 1n) {
+        break;
+      }
+      x = y;
+    }
+  }
+  return null;
+}
+
+function renderRsaPlaintext(value) {
+  const buffer = bigintToBuffer(value);
+  const utf8 = buffer.toString("utf8").replace(/\0/g, "");
+  const printable = buffer.length ? (utf8.match(/[\x20-\x7e]/g) || []).length / utf8.length : 0;
+  return {
+    value,
+    hex: buffer.toString("hex"),
+    text: printable >= 0.65 || /(?:flag|ctf)\{/i.test(utf8) ? utf8 : "",
+    score: printable + (/(?:flag|ctf)\{/i.test(utf8) ? 10 : 0),
+  };
+}
+
+function analyzeRsaParameters(text) {
+  const parameters = parseRsaAssignments(text);
+  const findings = [];
+  const plaintexts = [];
+  const moduli = Array.from(parameters.entries()).filter(([name]) => /^(?:n|modulus)\d*$/.test(name));
+  const ciphertexts = Array.from(parameters.entries()).filter(([name]) => /^(?:c|ct|ciphertext)\d*$/.test(name));
+  const exponents = Array.from(parameters.entries()).filter(([name]) => /^e\d*$/.test(name));
+  const addPlaintext = (label, value) => {
+    const rendered = renderRsaPlaintext(value);
+    const key = `${rendered.hex}@@${label}`;
+    if (!plaintexts.some((item) => `${item.hex}@@${item.label}` === key)) {
+      plaintexts.push({ label, ...rendered });
+    }
+  };
+
+  for (const [nName, n] of moduli) {
+    const suffix = nName.match(/\d+$/)?.[0] || "";
+    const e = parameters.get(`e${suffix}`) || parameters.get("e");
+    const d = parameters.get(`d${suffix}`) || parameters.get("d");
+    let p = parameters.get(`p${suffix}`) || parameters.get("p");
+    let q = parameters.get(`q${suffix}`) || parameters.get("q");
+    let phi = parameters.get(`phi${suffix}`) || parameters.get("phi");
+    if ((!p || !q) && e && d) {
+      const factors = factorRsaFromPrivateExponent(n, e, d);
+      if (factors) {
+        [p, q] = factors;
+        findings.push(`${nName}: factored from leaked private exponent ${d === parameters.get("d") ? "d" : `d${suffix}`}`);
+      }
+    }
+    if ((!p || !q) && phi) {
+      const sum = n - phi + 1n;
+      const discriminant = sum * sum - 4n * n;
+      const root = discriminant >= 0n ? bigintNthRoot(discriminant, 2) : null;
+      if (root !== null && root * root === discriminant) {
+        p = (sum + root) / 2n;
+        q = (sum - root) / 2n;
+        findings.push(`${nName}: factored from phi`);
+      }
+    }
+    if (p && q && p * q === n) {
+      phi = (p - 1n) * (q - 1n);
+      findings.push(`${nName}: p=${p} q=${q}`);
+    }
+    for (const [cName, c] of ciphertexts) {
+      if (c >= n) {
+        continue;
+      }
+      if (d) {
+        addPlaintext(`${cName} with ${nName}/d${suffix}`, bigintModPow(c, d, n));
+      }
+      for (const [eName, candidateE] of exponents) {
+        if (!phi) {
+          continue;
+        }
+        const candidateD = bigintModInverse(candidateE, phi);
+        if (candidateD) {
+          addPlaintext(`${cName} with ${nName}/${eName}`, bigintModPow(c, candidateD, n));
+        }
+      }
+    }
+  }
+
+  for (let leftIndex = 0; leftIndex < moduli.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < moduli.length; rightIndex += 1) {
+      const [leftName, leftN] = moduli[leftIndex];
+      const [rightName, rightN] = moduli[rightIndex];
+      const factor = bigintGcd(leftN, rightN);
+      if (factor > 1n && factor < leftN && factor < rightN) {
+        findings.push(`${leftName}/${rightName}: shared prime ${factor}`);
+        for (const [nName, n] of [
+          [leftName, leftN],
+          [rightName, rightN],
+        ]) {
+          const suffix = nName.match(/\d+$/)?.[0] || "";
+          const e = parameters.get(`e${suffix}`) || parameters.get("e");
+          const c = parameters.get(`c${suffix}`) || parameters.get(`ct${suffix}`) || parameters.get(`ciphertext${suffix}`);
+          const q = n / factor;
+          const phi = (factor - 1n) * (q - 1n);
+          const d = e ? bigintModInverse(e, phi) : null;
+          if (d && c !== undefined && c < n) {
+            addPlaintext(`c${suffix || ""} with ${nName} shared prime`, bigintModPow(c, d, n));
+          }
+        }
+      }
+    }
+  }
+
+  for (const [cName, c] of ciphertexts) {
+    for (const [eName, e] of exponents) {
+      if (e < 2n || e > 7n) {
+        continue;
+      }
+      const root = bigintNthRoot(c, Number(e));
+      if (root !== null && root ** e === c) {
+        findings.push(`${cName}/${eName}: exact low-exponent integer root`);
+        addPlaintext(`${cName} exact ${eName} root`, root);
+      }
+    }
+  }
+
+  for (const [nName, n] of moduli) {
+    const paired = exponents
+      .map(([eName, e]) => {
+        const suffix = eName.match(/\d+$/)?.[0] || "";
+        const c = parameters.get(`c${suffix}`) || parameters.get(`ct${suffix}`) || parameters.get(`ciphertext${suffix}`);
+        return c === undefined ? null : { eName, e, cName: `c${suffix}`, c };
+      })
+      .filter(Boolean);
+    for (let leftIndex = 0; leftIndex < paired.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < paired.length; rightIndex += 1) {
+        const left = paired[leftIndex];
+        const right = paired[rightIndex];
+        const coefficients = bigintExtendedGcd(left.e, right.e);
+        if (coefficients.gcd !== 1n || left.c >= n || right.c >= n) {
+          continue;
+        }
+        const leftPower = bigintSignedModPow(left.c, coefficients.x, n);
+        const rightCoefficient = (1n - coefficients.x * left.e) / right.e;
+        const rightPower = bigintSignedModPow(right.c, rightCoefficient, n);
+        if (leftPower !== null && rightPower !== null) {
+          findings.push(`${nName}: common-modulus attack with ${left.eName}/${right.eName}`);
+          addPlaintext(`${left.cName}/${right.cName} common modulus`, (leftPower * rightPower) % n);
+        }
+      }
+    }
+  }
+
+  plaintexts.sort((left, right) => right.score - left.score);
+  return { parameters, findings: dedupeStrings(findings), plaintexts };
+}
+
+function buildRsaReport(fileName, report) {
+  const lines = [
+    "# BUILT-IN RSA PARAMETER REPORT",
+    `file: ${fileName}`,
+    `parameters: ${report.parameters.size}`,
+    "",
+  ];
+  appendReportSection(
+    lines,
+    "parameters",
+    Array.from(report.parameters.entries()).map(([name, value]) => `${name}=${value}`),
+    "(none)",
+  );
+  appendReportSection(lines, "findings", report.findings, "(no deterministic weakness solved)");
+  appendReportSection(
+    lines,
+    "recovered plaintexts",
+    report.plaintexts.slice(0, 40).flatMap((item) => [
+      `### ${item.label}`,
+      item.text || `(binary plaintext; hex follows)`,
+      `hex=${item.hex}`,
+      "",
+    ]),
+    "(none)",
+  );
+  return `${lines.join("\n")}\n`;
+}
+
 async function buildArtifactSignals(filePath) {
   const extension = path.extname(filePath).toLowerCase();
   const sampleLimit =
@@ -7253,12 +7566,20 @@ async function buildArtifactSignals(filePath) {
   let mp4Report = null;
   let pngDimensionReport = null;
   let signalReport = null;
+  let rsaReport = null;
   const interleavedPayload = analyzeInterleavedPayload(buffer);
   if ([".vcd", ".csv", ".asc", ".log", ".txt"].includes(extension)) {
     try {
       signalReport = analyzeSignalArtifact(buffer, extension);
     } catch (_error) {
       signalReport = null;
+    }
+  }
+  if (artifact.family === "text") {
+    try {
+      rsaReport = analyzeRsaParameters(searchableText);
+    } catch (_error) {
+      rsaReport = null;
     }
   }
   if (artifact.family === "image" && artifact.badge === "PNG") {
@@ -7871,6 +8192,16 @@ async function buildArtifactSignals(filePath) {
   } else if (artifact.family === "text") {
     artifact.summary = "\u6587\u672c\u7c7b\u9644\u4ef6\uff0c\u4f18\u5148\u68c0\u67e5 flag \u6837\u5f0f\u3001base64\u3001hex\u3001URL \u548c\u9690\u85cf\u63d0\u793a\u3002";
     artifact.keywords.push("text");
+    if (rsaReport?.parameters.size >= 3 && Array.from(rsaReport.parameters.keys()).some((name) => /^(?:c|ct|ciphertext)\d*$/.test(name))) {
+      artifact.summary = "\u5bc6\u7801\u53c2\u6570\u6587\u672c\uff0c\u53ef\u5185\u7f6e\u5c1d\u8bd5 RSA \u79c1\u94a5\u6cc4\u9732\u3001\u5df2\u77e5\u56e0\u5b50/\u6b27\u62c9\u51fd\u6570\u548c\u4f4e\u6307\u6570\u6839\u653b\u51fb\u3002";
+      artifact.keywords.push("crypto", "rsa", "modulus", "decrypt");
+      artifact.highlights.push(`RSA \u53c2\u6570 ${rsaReport.parameters.size} \u4e2a\uff0c\u786e\u5b9a\u6027\u7ebf\u7d22 ${rsaReport.findings.length} \u6761\u3002`);
+      artifact.actions.push({
+        id: "solve-rsa-parameters",
+        label: "\u6c42\u89e3 RSA \u53c2\u6570",
+      });
+      artifact.suggestions.push("\u5185\u7f6e RSA \u5de5\u4f5c\u53f0\u4f1a\u5c1d\u8bd5\u79c1\u94a5\u6307\u6570\u53cd\u5206\u89e3\u3001\u5df2\u77e5 p/q/phi \u548c\u4f4e\u6307\u6570\u6574\u6570\u6839\u3002");
+    }
     if (signalReport) {
       artifact.summary =
         signalReport.kind === "vcd"
@@ -8211,6 +8542,9 @@ function scoreFlagCandidate(candidate) {
   if (/gif|descriptor|frame|mp4|track|chunk/i.test(source)) {
     score += 0.04;
   }
+  if (/rsa-report/i.test(source)) {
+    score += 0.12;
+  }
   if (/(?:fake|dummy|placeholder|example|sample|test)[-_ ]?flag|flag[-_ ]?(?:fake|dummy|placeholder|example|sample|test)/i.test(value)) {
     score -= 0.48;
   }
@@ -8291,6 +8625,14 @@ function buildFailureGuide(error, action, artifact) {
       "如果像古典密码或多层弱加密，安装 Ciphey 后重跑可获得更深的自动尝试。",
     ];
     guide.fallback = "内置 ciphey-lite 已覆盖常见编码、文本隐写和单字节 XOR；未知密钥类密码仍需要题目线索。";
+  } else if (actionId === "solve-rsa-parameters") {
+    guide.title = "RSA \u53c2\u6570\u672a\u547d\u4e2d\u786e\u5b9a\u6027\u5f31\u70b9";
+    guide.steps = [
+      "\u786e\u8ba4\u9898\u9762\u4e2d\u7684 n/e/c/d/p/q/phi \u5df2\u4fdd\u7559\u4e3a name=value \u6216 name: value \u683c\u5f0f\u3002",
+      "\u5982\u679c\u6709\u591a\u7ec4\u6a21\u6570\u6216\u5bc6\u6587\uff0c\u7528 n1/e1/c1\u3001n2/e2/c2 \u533a\u5206\uff0c\u4fbf\u4e8e\u68c0\u67e5\u5171\u4eab\u7d20\u56e0\u5b50\u3002",
+      "\u5185\u7f6e\u5de5\u4f5c\u53f0\u5df2\u5c1d\u8bd5\u5df2\u77e5 p/q/phi/d\u3001\u6cc4\u9732\u79c1\u94a5\u6307\u6570\u53cd\u5206\u89e3\u3001\u5171\u4eab\u7d20\u56e0\u5b50\u548c e<=7 \u7684\u6574\u6570\u6839\u3002",
+    ];
+    guide.fallback = "\u5982\u679c\u4ecd\u672a\u547d\u4e2d\uff0c\u901a\u5e38\u9700\u8981\u9898\u76ee\u7279\u5b9a\u7684 padding oracle\u3001Coppersmith\u3001Wiener\u3001\u5171\u6a21\u653b\u51fb\u6216\u4ea4\u4e92\u5f0f\u670d\u52a1\u7ebf\u7d22\u3002";
   } else if (actionId === "extract-png-lsb") {
     guide.title = "PNG 低位平面未命中";
     guide.steps = [
@@ -9129,6 +9471,23 @@ function decodeEncodedText(filePath, outputRoot, options = {}) {
   const outPath = writeGeneratedFile(outputRoot, generatedName, sections.join("\n"));
   return {
     message: "\u5df2\u5c06\u89e3\u7801\u5185\u5bb9\u8f93\u51fa\u4e3a\u6587\u672c\u6587\u4ef6\u3002",
+    createdFiles: [outPath],
+  };
+}
+
+function solveRsaParameters(filePath, outputRoot) {
+  const buffer = fs.readFileSync(filePath);
+  const report = analyzeRsaParameters(decodeBufferAsText(buffer));
+  if (report.parameters.size < 3 || (!report.findings.length && !report.plaintexts.length)) {
+    throw new Error("\u53d1\u73b0 RSA \u53c2\u6570\uff0c\u4f46\u6ca1\u6709\u547d\u4e2d\u53ef\u786e\u5b9a\u81ea\u52a8\u6c42\u89e3\u7684\u5f31\u70b9\u3002");
+  }
+  const outPath = writeGeneratedFile(
+    outputRoot,
+    `${sanitizeSegment(path.parse(filePath).name)}-rsa-report.txt`,
+    buildRsaReport(path.basename(filePath), report),
+  );
+  return {
+    message: `\u5df2\u5206\u6790 ${report.parameters.size} \u4e2a RSA \u53c2\u6570\uff0c\u6062\u590d ${report.plaintexts.length} \u4e2a\u660e\u6587\u5019\u9009\u3002`,
     createdFiles: [outPath],
   };
 }
@@ -11300,6 +11659,9 @@ async function runArtifactActionInternal(actionId, filePath, outputRoot, options
   if (actionId === "decode-encoded-text") {
     return decodeEncodedText(filePath, baseDir, options);
   }
+  if (actionId === "solve-rsa-parameters") {
+    return solveRsaParameters(filePath, baseDir);
+  }
   if (actionId === "analyze-signal-data") {
     return analyzeSignalData(filePath, baseDir);
   }
@@ -11396,6 +11758,9 @@ function shouldAutoRun(actionId, artifact) {
         artifact.name,
       );
     return !structuredReport && artifact.depth < MAX_PIPELINE_DEPTH && !(artifact.flagCandidates || []).length;
+  }
+  if (actionId === "solve-rsa-parameters") {
+    return artifact.depth === 0 && artifact.family === "text";
   }
   if (actionId === "analyze-signal-data") {
     return artifact.depth === 0 && [".vcd", ".csv", ".asc", ".log", ".txt"].includes(artifact.extension);

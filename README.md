@@ -10,6 +10,7 @@ This project is intentionally limited to legitimate CTF training workflows:
 - extract likely flag candidates from text, ASCII / UTF-16 strings, recursive encoded content, and CJK codepoint byte projection
 - automatically unpack ZIP, GZIP, TAR, and TGZ content and continue recursive analysis
 - automatically decode base64, base58, base91, hex, base32, ascii85/Z85, URL-encoded, quoted-printable, UUEncode, binary/decimal byte streams, escaped byte text, DTMF combined-frequency streams, phone multitap text, A1Z26, NATO phonetic words, DNA 2-bit streams, single-byte XOR, ROT/Caesar, Affine, Rail Fence, Morse, Polybius, Bacon, Brainfuck/Ook, zero-width text, whitespace stego, Unicode tag text, and compressed text layers when they produce useful local results
+- automatically solve common local RSA parameter weaknesses from text attachments, including known `p/q/phi/d`, leaked-private-exponent factor recovery, shared-prime and common-modulus attacks, and exact low-public-exponent roots
 - automatically extract solvable image clues such as bundled offline OCR, appended payloads, fixed-block interleaved files, PNG text chunks, PNG/BMP low-bit-plane candidates, GIF comment/application/plain-text extensions, GIF image-descriptor bitstreams, and JPEG COM / XMP / APP segment payloads
 - automatically inspect MP4/ISO-BMFF top-level boxes and chunk-offset tables, then repair hidden trailing tracks and unsorted `stco`/`co64` tables into derived playable files
 - automatically decode QR and 1D barcode payloads from local images and export RGB / luminance / edge / JPEG-block visualization views for image-based challenges
@@ -40,7 +41,7 @@ This project does **not** target real-world systems and should not be used for u
 
 ## Current Capability Areas
 
-- `crypto`: simple encoded content discovery, category hints, and workflow guidance
+- `crypto`: recursive classical encoding/cipher recovery plus common deterministic RSA parameter attacks and plaintext extraction
 - `web`: authorized local/private-target crawling, robots/sitemap/source-map discovery, response clue extraction, and downloaded-artifact recursion
 - `reverse`: ELF / PE / APK structure extraction, strings/import/export/symbol triage, and flow hints
 - `pwn`: ELF checksec-lite, risky import/function surface, classic seccomp-BPF recovery, core-dump crash-state summaries, local/network I/O and seccomp/alarm/heap profiles, writable/executable/RWX/staging memory surfaces, interesting menu/format/shell strings, prioritized ret2win/overflow/format-string/GOT/ORW/ROP hypotheses, x86/x64 ROP candidates plus lightweight AArch64/ARM/MIPS/RISC-V gadget scans, argument-control/syscall/stack-pivot capability summaries, loader/shared-library clues, and protection-oriented next steps
@@ -104,7 +105,7 @@ npm run dist:dir
 
 The unpacked Windows app will be written to `release/win-unpacked/`.
 
-A downloadable zip can be created from the unpacked build. The current local package name is `release/CTF-Compass-0.7.1-win-x64.zip`.
+A downloadable zip can be created from the unpacked build. The current local package name is `release/CTF-Compass-0.8.0-win-x64.zip`.
 
 Run local analyzer regressions:
 

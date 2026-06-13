@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const zlib = require("zlib");
+const crypto = require("crypto");
 const AdmZip = require("adm-zip");
 const { PNG } = require("pngjs");
 const { analyzeChallenge } = require("../desktop/analyzer");
@@ -177,6 +178,66 @@ function createMemoryFixture(filePath, flag) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, memory);
   return filePath;
+}
+
+function smokeBigintModPow(base, exponent, modulus) {
+  let result = 1n;
+  let value = base % modulus;
+  let power = exponent;
+  while (power) {
+    if (power & 1n) {
+      result = (result * value) % modulus;
+    }
+    value = (value * value) % modulus;
+    power >>= 1n;
+  }
+  return result;
+}
+
+function smokeBase64UrlBigint(value) {
+  const normalized = String(value).replace(/-/g, "+").replace(/_/g, "/");
+  const buffer = Buffer.from(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="), "base64");
+  return BigInt(`0x${buffer.toString("hex")}`);
+}
+
+function createRsaLeakedDFixture(filePath, flag) {
+  const { privateKey } = crypto.generateKeyPairSync("rsa", {
+    modulusLength: 1024,
+    publicExponent: 65537,
+  });
+  const key = privateKey.export({ format: "jwk" });
+  const n = smokeBase64UrlBigint(key.n);
+  const e1 = smokeBase64UrlBigint(key.e);
+  const d1 = smokeBase64UrlBigint(key.d);
+  const e2 = 3n;
+  const message = BigInt(`0x${Buffer.from(flag, "utf8").toString("hex")}`);
+  const c = smokeBigintModPow(message, e2, n);
+  return writeText(filePath, `n1=${n}\ne1=${e1}\nd1=${d1}\ne2=${e2}\nc=${c}\n`);
+}
+
+function createRsaSharedPrimeFixture(filePath, flag) {
+  const p = crypto.generatePrimeSync(384, { bigint: true });
+  const q1 = crypto.generatePrimeSync(384, { bigint: true });
+  const q2 = crypto.generatePrimeSync(384, { bigint: true });
+  const n1 = p * q1;
+  const n2 = p * q2;
+  const e = 65537n;
+  const message = BigInt(`0x${Buffer.from(flag, "utf8").toString("hex")}`);
+  const c1 = smokeBigintModPow(message, e, n1);
+  const c2 = smokeBigintModPow(message, e, n2);
+  return writeText(filePath, `n1=${n1}\ne1=${e}\nc1=${c1}\nn2=${n2}\ne2=${e}\nc2=${c2}\n`);
+}
+
+function createRsaCommonModulusFixture(filePath, flag) {
+  const p = crypto.generatePrimeSync(384, { bigint: true });
+  const q = crypto.generatePrimeSync(384, { bigint: true });
+  const n = p * q;
+  const e1 = 17n;
+  const e2 = 65537n;
+  const message = BigInt(`0x${Buffer.from(flag, "utf8").toString("hex")}`);
+  const c1 = smokeBigintModPow(message, e1, n);
+  const c2 = smokeBigintModPow(message, e2, n);
+  return writeText(filePath, `n=${n}\ne1=${e1}\nc1=${c1}\ne2=${e2}\nc2=${c2}\n`);
 }
 
 function collectFlags(result) {
@@ -1456,6 +1517,60 @@ async function main() {
       memoryFlag,
       "-forensic-report.txt",
       /Windows minidump/,
+    ),
+  );
+
+  const rsaFlag = "flag{rsa_leaked_d_smoke}";
+  const rsaPath = createRsaLeakedDFixture(path.join(root, "input", "rsa-leaked-d.txt"), rsaFlag);
+  results.push(
+    await runReportFlagCase(
+      root,
+      "rsa-leaked-private-exponent",
+      {
+        title: "RSA leaked d smoke",
+        description: "Recover the factors from the leaked old private exponent, then decrypt under the new exponent.",
+        tags: ["crypto", "rsa"],
+        artifacts: [rsaPath],
+      },
+      rsaFlag,
+      "-rsa-report.txt",
+      /factored from leaked private exponent/,
+    ),
+  );
+
+  const sharedPrimeFlag = "flag{rsa_shared_prime_smoke}";
+  const sharedPrimePath = createRsaSharedPrimeFixture(path.join(root, "input", "rsa-shared-prime.txt"), sharedPrimeFlag);
+  results.push(
+    await runReportFlagCase(
+      root,
+      "rsa-shared-prime",
+      {
+        title: "RSA shared prime smoke",
+        description: "Recover plaintexts from two public moduli that reuse one prime.",
+        tags: ["crypto", "rsa"],
+        artifacts: [sharedPrimePath],
+      },
+      sharedPrimeFlag,
+      "-rsa-report.txt",
+      /shared prime/,
+    ),
+  );
+
+  const commonModulusFlag = "flag{rsa_common_modulus_smoke}";
+  const commonModulusPath = createRsaCommonModulusFixture(path.join(root, "input", "rsa-common-modulus.txt"), commonModulusFlag);
+  results.push(
+    await runReportFlagCase(
+      root,
+      "rsa-common-modulus",
+      {
+        title: "RSA common modulus smoke",
+        description: "Recover a message encrypted under the same modulus with coprime public exponents.",
+        tags: ["crypto", "rsa"],
+        artifacts: [commonModulusPath],
+      },
+      commonModulusFlag,
+      "-rsa-report.txt",
+      /common-modulus attack/,
     ),
   );
 

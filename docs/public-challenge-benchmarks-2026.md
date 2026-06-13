@@ -18,6 +18,7 @@ This document records validation against recently released public CTF challenges
 | Jeanne d'Hack: Blind Distribution | Misc / MP4 repair | Partial, repair completed | Detects unsorted `stco`/`co64` chunk offsets, sorts them, and exports a repaired MP4. |
 | UofTCTF: babybof | Pwn | Partial static triage | Unpacks the challenge, identifies ELF64 x86-64, partial RELRO, NX, no PIE, no canary, risky `gets`/`printf`/`system`, and prioritizes ret2win/stack-overflow paths. |
 | UofTCTF: baby-exfil | Forensic / pcapng | Partial | Extracts HTTP, DNS, TLS SNI, session, and object clues. Full challenge-specific exfil reconstruction remains a manual gap. |
+| UofTCTF: Leaked d | Crypto / RSA | Solved | Parses `n1/e1/d1/e2/c`, factors the modulus from the leaked old private exponent, derives the new private exponent, and recovers the published flag. |
 | Fennec CTF: EE | Hardware / VCD / SPI | Solved | Parses the VCD, identifies useful clock/data pairs, samples both edges and bit orders, applies bit reversal and single-byte XOR, and recovers the published flag. |
 | Fennec CTF: Ch1p | Hardware / logic CSV | Solved | Detects binary columns, tests common gate expressions and bit orders, and recovers the published flag from the resulting bitstream. |
 | Fennec CTF: ARMy | Pwn / AArch64 | Partial static triage | Identifies ELF64 AArch64, protections and fixed-address/GOT paths, suppresses the embedded fake flag, and exports AArch64 `ret`, branch, and `svc` gadget candidates. |
@@ -43,6 +44,7 @@ This document records validation against recently released public CTF challenges
 - Added fixed-block round-robin file recovery and aligned PNG contact sheets.
 - Added bundled offline English OCR with flag-shape normalization; the full `scrapbooking` pipeline now reaches a solved result.
 - Added built-in MBR/GPT, FAT/NTFS/ext/XFS, Windows minidump, and raw-memory forensic triage.
+- Added a built-in RSA parameter workbench for known factors/phi/private exponents, leaked-`d` factor recovery, shared primes, common modulus, and exact low-exponent roots.
 - Raised solved-state confidence and filtered low-diversity or punctuation-heavy random brace strings.
 
 ## Reproduction Notes
