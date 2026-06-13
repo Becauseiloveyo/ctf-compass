@@ -1,11 +1,12 @@
 # Local Web Workbench
 
-The Web workbench is intended for authorized CTF targets running on the local machine, a virtual machine, or a private network. It combines bounded passive-style crawling with the existing local attachment solver.
+The Web workbench is intended for authorized CTF targets running locally, on a virtual/private network, or on a public competition host whose rules permit automated GET traffic. It combines bounded passive-style crawling with the existing local attachment solver.
 
 ## Safety Boundary
 
 - Requires an explicit authorization confirmation before each run.
-- Accepts only HTTP and HTTPS targets resolving exclusively to localhost, loopback, link-local, or private-network addresses.
+- Accepts IP, domain, host:port, and full HTTP/HTTPS URL inputs.
+- Requires a separate explicit option before scanning a target that resolves to a public address.
 - Keeps every redirect and discovered URL on the original origin.
 - Sends GET requests only.
 - Does not execute page JavaScript or submit forms.
@@ -16,7 +17,7 @@ The target should still be isolated from sensitive services. The crawler reads r
 
 ## Analysis Flow
 
-1. Validate the target URL and resolve it to allowed local/private addresses.
+1. Normalize the target address, validate authorization scope, and resolve its addresses.
 2. Fetch the entry page and a small bounded set of common CTF paths.
 3. Discover same-origin links, scripts, API routes, forms, source maps, robots entries, and sitemap entries.
 4. Inspect response bodies and headers for comments, cookies, debug output, sensitive clue words, and flag-shaped values.

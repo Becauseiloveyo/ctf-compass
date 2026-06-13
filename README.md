@@ -15,14 +15,14 @@ This project is intentionally limited to legitimate CTF training workflows:
 - automatically inspect MP4/ISO-BMFF top-level boxes and chunk-offset tables, then repair hidden trailing tracks and unsorted `stco`/`co64` tables into derived playable files
 - automatically decode QR and 1D barcode payloads from local images and export RGB / luminance / edge / JPEG-block visualization views for image-based challenges
 - automatically detect modified PNG IHDR dimensions from IDAT scanline structure and generate repaired dimension candidates
-- automatically summarize local traffic captures, extracting HTTP requests, DNS names, TLS SNI, cookies/tokens, USB HID keyboard text, USB mouse tracks, exported HTTP objects, directional TCP/UDP streams, ICMP payload channels, DNS label streams, and IPv4 ID/TTL covert-channel candidates
+- automatically summarize local traffic captures, extracting HTTP requests, DNS names, TLS SNI, cookies/tokens, device-separated USB HID keyboard text, USB mouse tracks, Xbox-style controller state and stick views, exported HTTP objects, directional TCP/UDP streams, ICMP payload channels, DNS label streams, and IPv4 ID/TTL covert-channel candidates
 - automatically identify MBR/GPT disk images, common FAT/NTFS/ext/XFS file systems, export bounded small partitions, and extract process/command/URL/credential indicators from Windows minidumps and raw memory images
 - automatically parse VCD logic-analyzer captures, CAN/candump/ASC logs, and binary logic CSV files, trying SPI clock edges, UART 8N1 timing, I2C ACK-framed bytes, arbitration-ID payload aggregation, bit orders, gate expressions, bit reversal, and single-byte XOR
 - safely inspect ONNX, Safetensors, Pickle/Joblib, and checkpoint-style model attachments for metadata, tensors, operators, prompt strings, and unsafe deserialization indicators without executing model content
 - automatically extract PDF metadata, XMP packets, readable Flate streams, and OOXML/Office package contents for recursive local analysis
 - automatically inspect WAV metadata, PCM LSB candidates, tone / morse hints, leading-alphabet tone maps, and waveform / spectrogram views for audio-based local challenges
 - automatically inspect ELF / PE / APK attachments, extracting headers, sections, imports / exports, symbol / relocation summaries, interpreter / shared-library hints, ELF roles, GNU Build IDs and GLIBC versions, checksec-lite protections, classic seccomp-BPF syscall policies, ELF core-dump notes/registers/mappings, risky Pwn imports, I/O/network/heap/sandbox profiles, prioritized Pwn paths, short x86/x64 ROP gadget candidates, lightweight AArch64/ARM/MIPS/RISC-V return and syscall gadgets, manifest strings, DEX method indexes, Android string-pool resources, and unpacked package contents for recursive local analysis
-- map authorized localhost and private-network Web CTF targets with bounded same-origin GET requests, extracting routes, scripts, source maps, comments, response headers, cookies, forms, error clues, and direct flag candidates
+- map authorized Web CTF targets from IP, domain, host:port, or full URL inputs with bounded same-origin GET requests, keeping public targets behind an explicit authorization option and extracting routes, scripts, source maps, comments, response headers, cookies, forms, error clues, and direct flag candidates
 - automatically save same-origin Web downloads and feed archives, images, captures, binaries, and other responses into the existing recursive local solver
 - run a bundled local toolbox on each root artifact, covering strings-lite, binwalk-lite, ciphey-lite, zsteg-lite, tshark-lite, and rabin2/exif-lite style checks without external downloads
 - detect local professional CTF tools on PATH and auto-run safe adapters instead of showing placeholder guidance
@@ -42,7 +42,7 @@ This project does **not** target real-world systems and should not be used for u
 ## Current Capability Areas
 
 - `crypto`: recursive classical encoding/cipher recovery plus common deterministic RSA parameter attacks and plaintext extraction
-- `web`: authorized local/private-target crawling, robots/sitemap/source-map discovery, response clue extraction, and downloaded-artifact recursion
+- `web`: authorized local/private/public-CTF-target crawling, flexible address normalization, robots/sitemap/source-map discovery, response clue extraction, and downloaded-artifact recursion
 - `reverse`: ELF / PE / APK structure extraction, strings/import/export/symbol triage, and flow hints
 - `pwn`: ELF checksec-lite, risky import/function surface, classic seccomp-BPF recovery, core-dump crash-state summaries, local/network I/O and seccomp/alarm/heap profiles, writable/executable/RWX/staging memory surfaces, interesting menu/format/shell strings, prioritized ret2win/overflow/format-string/GOT/ORW/ROP hypotheses, x86/x64 ROP candidates plus lightweight AArch64/ARM/MIPS/RISC-V gadget scans, argument-control/syscall/stack-pivot capability summaries, loader/shared-library clues, and protection-oriented next steps
 - `forensic`: pcap/pcapng stream reconstruction, ICMP/DNS/IP covert-channel candidates, USB HID reconstruction, MBR/GPT and file-system identification, minidump/raw-memory indicator recovery, archive recursion, document extraction, and hidden-artifact oriented workflow hints
@@ -105,7 +105,7 @@ npm run dist:dir
 
 The unpacked Windows app will be written to `release/win-unpacked/`.
 
-A downloadable zip can be created from the unpacked build. The current local package name is `release/CTF-Compass-0.8.0-win-x64.zip`.
+A downloadable zip can be created from the unpacked build. The current local package name is `release/CTF-Compass-0.9.0-win-x64.zip`.
 
 Run local analyzer regressions:
 

@@ -17,7 +17,7 @@ const MAX_ARCHIVE_ENTRIES = 80;
 const MAX_ARCHIVE_TOTAL_BYTES = 32 * 1024 * 1024;
 const MAX_PIPELINE_DEPTH = 5;
 const MAX_TRAFFIC_BYTES = 24 * 1024 * 1024;
-const MAX_TRAFFIC_FRAMES = 12000;
+const MAX_TRAFFIC_FRAMES = 180000;
 const MAX_HTTP_OBJECTS = 24;
 const MAX_HTTP_BODY_BYTES = 512 * 1024;
 const MAX_AUDIO_BYTES = 12 * 1024 * 1024;
@@ -4241,33 +4241,42 @@ const HID_KEY_MAP = {
   51: [";", ":"], 52: ["'", "\""], 53: ["`", "~"], 54: [",", "<"], 55: [".", ">"], 56: ["/", "?"],
 };
 
-function extractUsbCapturePayload(frame) {
+function extractUsbCaptureRecord(frame) {
   const data = frame.data;
   if (!USB_CAPTURE_LINK_TYPES.has(frame.linkType) || !data.length) {
     return null;
   }
-  if (frame.linkType === 249 && data.length >= 27) {
-    const headerLength = data.readUInt16LE(0);
-    if (headerLength >= 27 && headerLength <= data.length) {
-      return data.subarray(headerLength);
+  if (frame.linkType === 249) {
+    if (data.length < 27) {
+      return null;
     }
+    const headerLength = data.readUInt16LE(0);
+    if (headerLength < 27 || headerLength > data.length) {
+      return null;
+    }
+    const payload = data.subarray(headerLength);
+    return payload.length
+      ? {
+          payload,
+          busId: data.readUInt16LE(17),
+          deviceAddress: data.readUInt16LE(19),
+          endpoint: data[21],
+          transferType: data[22],
+        }
+      : null;
   }
   if ((frame.linkType === 189 || frame.linkType === 220) && data.length > 64) {
-    return data.subarray(64);
+    return { payload: data.subarray(64), busId: null, deviceAddress: null, endpoint: null, transferType: null };
   }
-  return data;
+  return { payload: data, busId: null, deviceAddress: null, endpoint: null, transferType: null };
 }
 
 function findKeyboardReport(payload) {
-  if (!payload || payload.length < 8) {
+  if (!payload || payload.length !== 8) {
     return null;
   }
-  const starts = dedupeStrings([0, Math.max(0, payload.length - 8)].map(String)).map(Number);
-  for (const start of starts) {
-    const report = payload.subarray(start, start + 8);
-    if (report.length === 8 && report[1] === 0 && Array.from(report.subarray(2)).every((value) => value === 0 || (value >= 4 && value <= 0x65))) {
-      return report;
-    }
+  if (payload[1] === 0 && Array.from(payload.subarray(2)).every((value) => value === 0 || (value >= 4 && value <= 0x65))) {
+    return payload;
   }
   return null;
 }
@@ -4297,41 +4306,212 @@ function decodeHidKeyboardReports(reports) {
   return { keyboardText: text, keyEvents: events };
 }
 
+function decodeHidMouseReport(payload) {
+  if (!payload) {
+    return null;
+  }
+  // Common report-ID 2 layout used by Logitech-style USB receivers.
+  if (payload.length === 9 && payload[0] === 2) {
+    return {
+      layout: "report-id-2-int16",
+      reportId: 2,
+      buttons: payload.readUInt16LE(1),
+      dx: payload.readInt16LE(3),
+      dy: payload.readInt16LE(5),
+      wheel: payload.readInt8(7),
+      horizontalWheel: payload.readInt8(8),
+    };
+  }
+  if (payload.length === 4) {
+    return {
+      layout: "boot-mouse-int8",
+      reportId: null,
+      buttons: payload[0],
+      dx: payload.readInt8(1),
+      dy: payload.readInt8(2),
+      wheel: payload.readInt8(3),
+      horizontalWheel: 0,
+    };
+  }
+  return null;
+}
+
+function decodeXboxControllerReport(payload) {
+  if (!payload || payload.length !== 48 || payload[0] !== 0x20) {
+    return null;
+  }
+  return {
+    packet: payload[2],
+    buttons: payload.readUInt16LE(4),
+    leftTrigger: payload.readUInt16LE(6),
+    rightTrigger: payload.readUInt16LE(8),
+    leftX: payload.readInt16LE(10),
+    leftY: payload.readInt16LE(12),
+    rightX: payload.readInt16LE(14),
+    rightY: payload.readInt16LE(16),
+  };
+}
+
 function analyzeUsbHidFrames(frames) {
   const usbFrames = frames.filter((frame) => USB_CAPTURE_LINK_TYPES.has(frame.linkType));
   if (!usbFrames.length) {
-    return { frameCount: 0, keyboardText: "", keyEvents: [], mouseEvents: [] };
+    return { frameCount: 0, payloadCount: 0, keyboardText: "", keyEvents: [], mouseEvents: [], mouseLayouts: [], controllerEvents: [] };
   }
   const keyboardReports = [];
   const mouseEvents = [];
+  const controllerEvents = [];
+  const mouseLayouts = new Set();
+  let payloadCount = 0;
   let mouseX = 0;
   let mouseY = 0;
   usbFrames.forEach((frame, frameIndex) => {
-    const payload = extractUsbCapturePayload(frame);
-    if (!payload || !payload.length) {
+    const record = extractUsbCaptureRecord(frame);
+    if (!record?.payload?.length) {
       return;
     }
-    const keyboard = findKeyboardReport(payload);
+    const { payload } = record;
+    payloadCount += 1;
+    const controller = decodeXboxControllerReport(payload);
+    if (controller) {
+      controllerEvents.push({
+        frameIndex,
+        busId: record.busId,
+        deviceAddress: record.deviceAddress,
+        endpoint: record.endpoint,
+        ...controller,
+      });
+      return;
+    }
+    const keyboard = record.endpoint === null || record.endpoint === 0x81 ? findKeyboardReport(payload) : null;
     if (keyboard) {
       keyboardReports.push(keyboard);
       return;
     }
-    if (payload.length >= 4 && payload.length <= 8) {
-      const dx = payload.readInt8(1);
-      const dy = payload.readInt8(2);
-      const wheel = payload.readInt8(3);
-      if (dx || dy || wheel || payload[0]) {
-        mouseX += dx;
-        mouseY += dy;
-        mouseEvents.push({ frameIndex, buttons: payload[0], dx, dy, wheel, x: mouseX, y: mouseY });
-      }
+    const mouse = decodeHidMouseReport(payload);
+    if (mouse && (mouse.dx || mouse.dy || mouse.wheel || mouse.horizontalWheel || mouse.buttons)) {
+      mouseX += mouse.dx;
+      mouseY += mouse.dy;
+      mouseLayouts.add(mouse.layout);
+      mouseEvents.push({
+        frameIndex,
+        busId: record.busId,
+        deviceAddress: record.deviceAddress,
+        endpoint: record.endpoint,
+        ...mouse,
+        x: mouseX,
+        y: mouseY,
+      });
     }
   });
   return {
     frameCount: usbFrames.length,
+    payloadCount,
     ...decodeHidKeyboardReports(keyboardReports),
     mouseEvents,
+    mouseLayouts: Array.from(mouseLayouts),
+    controllerEvents,
   };
+}
+
+function setPngPixel(png, x, y, value = 20) {
+  if (x < 0 || y < 0 || x >= png.width || y >= png.height) {
+    return;
+  }
+  const offset = (Math.floor(y) * png.width + Math.floor(x)) * 4;
+  png.data[offset] = value;
+  png.data[offset + 1] = value;
+  png.data[offset + 2] = value;
+  png.data[offset + 3] = 255;
+}
+
+function drawPngLine(png, startX, startY, endX, endY, thickness = 2) {
+  let x0 = Math.round(startX);
+  let y0 = Math.round(startY);
+  const x1 = Math.round(endX);
+  const y1 = Math.round(endY);
+  const dx = Math.abs(x1 - x0);
+  const sx = x0 < x1 ? 1 : -1;
+  const dy = -Math.abs(y1 - y0);
+  const sy = y0 < y1 ? 1 : -1;
+  let error = dx + dy;
+  while (true) {
+    for (let offsetY = -thickness; offsetY <= thickness; offsetY += 1) {
+      for (let offsetX = -thickness; offsetX <= thickness; offsetX += 1) {
+        if (offsetX * offsetX + offsetY * offsetY <= thickness * thickness) {
+          setPngPixel(png, x0 + offsetX, y0 + offsetY);
+        }
+      }
+    }
+    if (x0 === x1 && y0 === y1) {
+      break;
+    }
+    const doubled = 2 * error;
+    if (doubled >= dy) {
+      error += dy;
+      x0 += sx;
+    }
+    if (doubled <= dx) {
+      error += dx;
+      y0 += sy;
+    }
+  }
+}
+
+function renderUsbMouseTrack(mouseEvents, transform = "normal") {
+  const points = mouseEvents
+    .filter((item) => item.dx || item.dy)
+    .map((item) => {
+      if (transform === "swap-xy") return { x: item.y, y: item.x };
+      if (transform === "invert-y") return { x: item.x, y: -item.y };
+      return { x: item.x, y: item.y };
+    });
+  if (points.length < 2) {
+    return null;
+  }
+  const minX = Math.min(...points.map((item) => item.x));
+  const maxX = Math.max(...points.map((item) => item.x));
+  const minY = Math.min(...points.map((item) => item.y));
+  const maxY = Math.max(...points.map((item) => item.y));
+  const rangeX = Math.max(1, maxX - minX);
+  const rangeY = Math.max(1, maxY - minY);
+  const margin = 28;
+  const scale = Math.min(1, 1400 / rangeX, 1000 / rangeY);
+  const width = Math.max(180, Math.ceil(rangeX * scale) + margin * 2);
+  const height = Math.max(180, Math.ceil(rangeY * scale) + margin * 2);
+  if (width * height > 8_000_000) {
+    return null;
+  }
+  const png = new PNG({ width, height });
+  png.data.fill(255);
+  const project = (point) => ({
+    x: margin + (point.x - minX) * scale,
+    y: margin + (point.y - minY) * scale,
+  });
+  let previous = project(points[0]);
+  points.slice(1).forEach((point) => {
+    const current = project(point);
+    drawPngLine(png, previous.x, previous.y, current.x, current.y, 1);
+    previous = current;
+  });
+  return PNG.sync.write(png);
+}
+
+function renderControllerStickHeatmap(controllerEvents, xKey, yKey) {
+  const points = controllerEvents.filter((item) => Number.isFinite(item[xKey]) && Number.isFinite(item[yKey]));
+  const unique = new Set(points.map((item) => `${item[xKey]},${item[yKey]}`));
+  if (points.length < 20 || unique.size < 20) {
+    return null;
+  }
+  const size = 720;
+  const margin = 20;
+  const png = new PNG({ width: size, height: size });
+  png.data.fill(255);
+  points.forEach((item) => {
+    const x = margin + Math.round(((item[xKey] + 32768) / 65535) * (size - margin * 2));
+    const y = margin + Math.round(((32767 - item[yKey]) / 65535) * (size - margin * 2));
+    setPngPixel(png, x, y, 18);
+  });
+  return PNG.sync.write(png);
 }
 
 function parseDnsName(buffer, startOffset, depth = 0) {
@@ -4646,9 +4826,12 @@ function analyzeTrafficBuffer(buffer) {
     covertCandidates: [],
     usbHid: {
       frameCount: 0,
+      payloadCount: 0,
       keyboardText: "",
       keyEvents: [],
       mouseEvents: [],
+      mouseLayouts: [],
+      controllerEvents: [],
     },
   };
 
@@ -4868,8 +5051,13 @@ function buildTrafficSummaryText(fileName, summary) {
   if (summary.usbHid?.frameCount) {
     lines.push("# USB-HID");
     lines.push(`frames: ${summary.usbHid.frameCount}`);
+    lines.push(`payloads: ${summary.usbHid.payloadCount || 0}`);
     lines.push(`key-events: ${summary.usbHid.keyEvents.length}`);
     lines.push(`mouse-events: ${summary.usbHid.mouseEvents.length}`);
+    lines.push(`controller-events: ${summary.usbHid.controllerEvents?.length || 0}`);
+    if (summary.usbHid.mouseLayouts?.length) {
+      lines.push(`mouse-layouts: ${summary.usbHid.mouseLayouts.join(", ")}`);
+    }
     if (summary.usbHid.keyboardText) {
       lines.push("", "## KEYBOARD TEXT", summary.usbHid.keyboardText);
     }
@@ -7941,6 +8129,10 @@ async function buildArtifactSignals(filePath) {
       artifact.highlights.push(`USB HID \u9f20\u6807\u8f68\u8ff9 ${trafficSummary.usbHid.mouseEvents.length} \u4e2a\u4e8b\u4ef6\u3002`);
       artifact.keywords.push("usb", "hid", "mouse", "forensic");
     }
+    if (trafficSummary?.usbHid?.controllerEvents?.length) {
+      artifact.highlights.push(`USB \u624b\u67c4\u8f93\u5165 ${trafficSummary.usbHid.controllerEvents.length} \u4e2a\u4e8b\u4ef6\uff0c\u5df2\u5bfc\u51fa\u6447\u6746\u8f68\u8ff9\u3002`);
+      artifact.keywords.push("usb", "controller", "gamepad", "forensic");
+    }
     if (lowered.includes("http/1.") || lowered.includes("get /") || lowered.includes("post /") || lowered.includes("host:")) {
       artifact.highlights.push("\u53d1\u73b0 HTTP \u8bf7\u6c42\u6216 Host \u7ebf\u7d22\u3002");
       artifact.keywords.push("http", "web");
@@ -9817,10 +10009,45 @@ function extractTrafficSessions(filePath, outputRoot) {
   }
   if (summary.usbHid?.mouseEvents?.length) {
     const csv = [
-      "frame,buttons,dx,dy,wheel,x,y",
-      ...summary.usbHid.mouseEvents.map((item) => `${item.frameIndex},${item.buttons},${item.dx},${item.dy},${item.wheel},${item.x},${item.y}`),
+      "frame,layout,report_id,buttons,dx,dy,wheel,horizontal_wheel,x,y",
+      ...summary.usbHid.mouseEvents.map(
+        (item) =>
+          `${item.frameIndex},${item.layout},${item.reportId ?? ""},${item.buttons},${item.dx},${item.dy},${item.wheel},${item.horizontalWheel || 0},${item.x},${item.y}`,
+      ),
     ].join("\n");
     createdFiles.push(writeGeneratedFile(outputRoot, `${sanitizeSegment(path.parse(filePath).name)}-usb-mouse.csv`, `${csv}\n`));
+    ["normal", "invert-y", "swap-xy"].forEach((transform) => {
+      const image = renderUsbMouseTrack(summary.usbHid.mouseEvents, transform);
+      if (image) {
+        createdFiles.push(
+          writeGeneratedFile(
+            outputRoot,
+            `${sanitizeSegment(path.parse(filePath).name)}-usb-mouse-track-${transform}.png`,
+            image,
+          ),
+        );
+      }
+    });
+  }
+  if (summary.usbHid?.controllerEvents?.length) {
+    const csv = [
+      "frame,bus,device,endpoint,packet,buttons,left_trigger,right_trigger,left_x,left_y,right_x,right_y",
+      ...summary.usbHid.controllerEvents.map(
+        (item) =>
+          `${item.frameIndex},${item.busId ?? ""},${item.deviceAddress ?? ""},${item.endpoint ?? ""},${item.packet},${item.buttons},${item.leftTrigger},${item.rightTrigger},${item.leftX},${item.leftY},${item.rightX},${item.rightY}`,
+      ),
+    ].join("\n");
+    const baseName = sanitizeSegment(path.parse(filePath).name);
+    createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-usb-controller.csv`, `${csv}\n`));
+    [
+      ["left", "leftX", "leftY"],
+      ["right", "rightX", "rightY"],
+    ].forEach(([label, xKey, yKey]) => {
+      const image = renderControllerStickHeatmap(summary.usbHid.controllerEvents, xKey, yKey);
+      if (image) {
+        createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-usb-controller-${label}-stick.png`, image));
+      }
+    });
   }
 
   return {
@@ -11710,7 +11937,7 @@ function shouldAutoRun(actionId, artifact) {
     return artifact.depth === 0;
   }
   if (actionId === "extract-image-ocr") {
-    return artifact.family === "image" && (artifact.depth === 0 || /(?:contact-sheet|repaired)/i.test(artifact.name));
+    return artifact.family === "image" && (artifact.depth === 0 || /(?:contact-sheet|repaired|usb-mouse-track|usb-controller-.*-stick)/i.test(artifact.name));
   }
   if (actionId === "extract-mp4-clues") {
     return artifact.badge === "MP4" && artifact.depth === 0;
@@ -11778,7 +12005,7 @@ function shouldAutoRun(actionId, artifact) {
     return artifact.depth === 0 && ["DISK", "MEMORY"].includes(artifact.badge);
   }
   if (actionId === "extract-png-text" || actionId === "extract-png-lsb") {
-    return artifact.depth < MAX_PIPELINE_DEPTH;
+    return artifact.depth < MAX_PIPELINE_DEPTH && !/(?:usb-mouse-track|usb-controller-.*-stick)/i.test(artifact.name);
   }
   if (actionId === "repair-png-dimensions") {
     return artifact.badge === "PNG" && artifact.depth === 0;

@@ -287,6 +287,41 @@ async function runNoFlagCase(root, name, payload) {
   };
 }
 
+async function runUsbVisualizationCase(root, fixturePath) {
+  const result = await analyzeChallenge(
+    {
+      title: "USB mouse and controller visualization smoke",
+      description: "Separate multiple USB devices and export their input trajectories.",
+      tags: ["misc", "pcap", "usb", "hid"],
+      artifacts: [fixturePath],
+    },
+    path.join(root, "usb-visualization-out"),
+  );
+  const generatedNames = result.pipelineLog.flatMap((entry) => entry.createdArtifacts.map((artifact) => artifact.name));
+  const expected = [
+    /-usb-mouse\.csv$/,
+    /-usb-mouse-track-normal\.png$/,
+    /-usb-controller\.csv$/,
+    /-usb-controller-left-stick\.png$/,
+    /-usb-controller-right-stick\.png$/,
+  ];
+  expected.forEach((pattern) => {
+    if (!generatedNames.some((name) => pattern.test(name))) {
+      throw new Error(`case usb-visualization: missing ${pattern}: ${generatedNames.join(", ")}`);
+    }
+  });
+  const keyboardArtifact = generatedNames.find((name) => /-usb-keyboard\.txt$/.test(name));
+  if (keyboardArtifact) {
+    throw new Error("case usb-visualization: controller reports were misclassified as keyboard data");
+  }
+  return {
+    name: "usb-visualization",
+    status: result.solver?.status,
+    actionsRun: result.solver?.actionsRun,
+    artifacts: result.challenge?.artifactCount,
+  };
+}
+
 async function runInterleavedRecoveryCase(root, fixturePath) {
   const outputRoot = path.join(root, "interleaved-png-recovery-out");
   const result = await analyzeChallenge(
@@ -685,7 +720,7 @@ function createMp4HiddenTrack(mp4Path, flag) {
   return mp4Path;
 }
 
-function createUsbKeyboardPcap(filePath, text) {
+function createUsbKeyboardPcap(filePath, text, leadingEmptyPackets = 0) {
   const pairs = {
     "\n": [0, 40], " ": [0, 44], "-": [0, 45], "_": [2, 45], "=": [0, 46], "+": [2, 46],
     "[": [0, 47], "{": [2, 47], "]": [0, 48], "}": [2, 48], "\\": [0, 49], "|": [2, 49],
@@ -702,18 +737,72 @@ function createUsbKeyboardPcap(filePath, text) {
     pairs[shiftedDigits[index]] = [2, 30 + index];
   });
 
-  const packets = [];
+  const packets = Array.from({ length: leadingEmptyPackets }, () => {
+    const emptyUsbPcap = Buffer.alloc(27);
+    emptyUsbPcap.writeUInt16LE(28, 0);
+    emptyUsbPcap[21] = 0x81;
+    return emptyUsbPcap;
+  });
   for (const char of text) {
     const pair = pairs[char];
     if (!pair) throw new Error(`unsupported HID smoke character: ${char}`);
     for (const report of [Buffer.from([pair[0], 0, pair[1], 0, 0, 0, 0, 0]), Buffer.alloc(8)]) {
       const usbPcap = Buffer.alloc(27);
       usbPcap.writeUInt16LE(27, 0);
+      usbPcap[21] = 0x81;
       usbPcap.writeUInt32LE(report.length, 23);
       packets.push(Buffer.concat([usbPcap, report]));
     }
   }
 
+  const globalHeader = Buffer.alloc(24);
+  globalHeader.writeUInt32LE(0xa1b2c3d4, 0);
+  globalHeader.writeUInt16LE(2, 4);
+  globalHeader.writeUInt16LE(4, 6);
+  globalHeader.writeUInt32LE(65535, 16);
+  globalHeader.writeUInt32LE(249, 20);
+  const records = packets.map((packet, index) => {
+    const header = Buffer.alloc(16);
+    header.writeUInt32LE(index, 0);
+    header.writeUInt32LE(packet.length, 8);
+    header.writeUInt32LE(packet.length, 12);
+    return Buffer.concat([header, packet]);
+  });
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, Buffer.concat([globalHeader, ...records]));
+  return filePath;
+}
+
+function createUsbMixedPcap(filePath) {
+  const wrapUsbPcap = (payload, endpoint, deviceAddress) => {
+    const header = Buffer.alloc(27);
+    header.writeUInt16LE(27, 0);
+    header.writeUInt16LE(2, 17);
+    header.writeUInt16LE(deviceAddress, 19);
+    header[21] = endpoint;
+    header[22] = 1;
+    header.writeUInt32LE(payload.length, 23);
+    return Buffer.concat([header, payload]);
+  };
+  const packets = [];
+  Array.from({ length: 32 }, (_, index) => {
+    const direction = Math.floor(index / 8) % 4;
+    return direction === 0 ? [20, 0] : direction === 1 ? [0, 20] : direction === 2 ? [-20, 0] : [0, -20];
+  }).forEach(([dx, dy], index) => {
+    const report = Buffer.alloc(9);
+    report[0] = 2;
+    report.writeInt16LE(dx, 3);
+    report.writeInt16LE(dy, 5);
+    packets.push(wrapUsbPcap(report, 0x82, 1));
+    const controller = Buffer.alloc(48);
+    controller[0] = 0x20;
+    controller[2] = index;
+    controller.writeInt16LE(-24000 + index * 1400, 10);
+    controller.writeInt16LE(22000 - index * 1200, 12);
+    controller.writeInt16LE(20000 - index * 1100, 14);
+    controller.writeInt16LE(-22000 + index * 1250, 16);
+    packets.push(wrapUsbPcap(controller, 0x82, 8));
+  });
   const globalHeader = Buffer.alloc(24);
   globalHeader.writeUInt32LE(0xa1b2c3d4, 0);
   globalHeader.writeUInt16LE(2, 4);
@@ -1575,7 +1664,7 @@ async function main() {
   );
 
   const usbFlag = "flag{usb_hid_smoke}";
-  const usbPcapPath = createUsbKeyboardPcap(path.join(root, "input", "usb-keyboard.pcap"), usbFlag);
+  const usbPcapPath = createUsbKeyboardPcap(path.join(root, "input", "usb-keyboard.pcap"), usbFlag, 12500);
   results.push(
     await runCase(
       root,
@@ -1588,6 +1677,9 @@ async function main() {
       usbFlag,
     ),
   );
+
+  const usbMixedPath = createUsbMixedPcap(path.join(root, "input", "usb-mouse-controller.pcap"));
+  results.push(await runUsbVisualizationCase(root, usbMixedPath));
 
   const vcdFlag = "flag{vcd_spi_signal_smoke}";
   const vcdPath = createSpiVcd(path.join(root, "input", "logic.vcd"), vcdFlag);

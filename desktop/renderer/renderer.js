@@ -250,6 +250,7 @@ const elements = {
   sandboxSize: document.getElementById("sandbox-size"),
   webTargetInput: document.getElementById("web-target-input"),
   webAuthorizedCheckbox: document.getElementById("web-authorized-checkbox"),
+  webPublicCheckbox: document.getElementById("web-public-checkbox"),
   webProbePathsCheckbox: document.getElementById("web-probe-paths-checkbox"),
   webMaxPagesSelect: document.getElementById("web-max-pages-select"),
   webMaxDepthSelect: document.getElementById("web-max-depth-select"),
@@ -441,7 +442,7 @@ function updateActionAvailability() {
   setButtonDisabled(elements.exportReportButton, !canExport, canExport ? "" : "\u5148\u8fd0\u884c\u4e00\u6b21\u5206\u6790\u3002");
   setButtonDisabled(elements.settingsExportReportButton, !canExport, canExport ? "" : "\u5148\u8fd0\u884c\u4e00\u6b21\u5206\u6790\u3002");
   const canRunWeb = Boolean(elements.webTargetInput?.value.trim() && elements.webAuthorizedCheckbox?.checked && !state.isBusy);
-  setButtonDisabled(elements.webRunButton, !canRunWeb, canRunWeb ? "" : "填写本地靶机 URL 并确认授权后开始。");
+  setButtonDisabled(elements.webRunButton, !canRunWeb, canRunWeb ? "" : "填写靶机地址并确认授权后开始。");
   setButtonDisabled(elements.webOpenReportButton, !state.webAnalysis?.reportPath || state.isBusy);
 
   [
@@ -1632,15 +1633,19 @@ function renderWebAnalysis() {
   }
 
   elements.webPagesList.innerHTML = "";
-  if (!result?.pages?.length) {
+  const webEntries = [
+    ...(result?.pages || []).map((page) => ({ ...page, kind: "page" })),
+    ...(result?.errors || []).map((error) => ({ ...error, kind: "error", status: "ERR", contentType: error.message, bytes: 0 })),
+  ];
+  if (!webEntries.length) {
     const empty = document.createElement("p");
     empty.className = "empty-copy";
     empty.textContent = "运行后会显示同源页面、脚本与路径。";
     elements.webPagesList.append(empty);
   } else {
-    result.pages.slice(0, 50).forEach((page) => {
+    webEntries.slice(0, 60).forEach((page) => {
       const item = document.createElement("div");
-      item.className = "web-page-item";
+      item.className = `web-page-item${page.kind === "error" ? " is-error" : ""}`;
       const status = document.createElement("span");
       status.className = "web-status-code";
       status.textContent = String(page.status);
@@ -1749,7 +1754,7 @@ async function runWebTargetAnalysis() {
   if (state.isBusy) return;
   const url = elements.webTargetInput.value.trim();
   if (!url || !elements.webAuthorizedCheckbox.checked) {
-    setStatus("填写本地靶机 URL 并确认授权后开始。", "error");
+    setStatus("填写靶机地址并确认授权后开始。", "error");
     return;
   }
   setBusy(true);
@@ -1758,6 +1763,7 @@ async function runWebTargetAnalysis() {
     state.webAnalysis = await window.ctfCompass.analyzeWebTarget({
       url,
       authorized: true,
+      allowPublic: elements.webPublicCheckbox.checked,
       probeCommonPaths: elements.webProbePathsCheckbox.checked,
       maxPages: Number(elements.webMaxPagesSelect.value),
       maxDepth: Number(elements.webMaxDepthSelect.value),
@@ -1943,6 +1949,7 @@ async function clearWorkspace() {
     elements.caseSummaryInput.value = "";
     elements.webTargetInput.value = "";
     elements.webAuthorizedCheckbox.checked = false;
+    elements.webPublicCheckbox.checked = false;
     await window.ctfCompass.clearWorkspace();
     renderAll();
     switchView("workspace");
@@ -2080,7 +2087,7 @@ bindClick(elements.webOpenReportButton, openWebReport);
   });
 });
 
-[elements.webTargetInput, elements.webAuthorizedCheckbox, elements.webProbePathsCheckbox, elements.webMaxPagesSelect, elements.webMaxDepthSelect].forEach(
+[elements.webTargetInput, elements.webAuthorizedCheckbox, elements.webPublicCheckbox, elements.webProbePathsCheckbox, elements.webMaxPagesSelect, elements.webMaxDepthSelect].forEach(
   (input) => {
     input.addEventListener("input", updateActionAvailability);
     input.addEventListener("change", updateActionAvailability);

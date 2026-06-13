@@ -252,19 +252,19 @@
             <section class="panel web-control-panel">
               <div class="panel-head">
                 <div>
-                  <p class="panel-kicker">LOCAL WEB TARGET</p>
-                  <h3 class="panel-title">授权靶机分析</h3>
+                  <p class="panel-kicker">AUTHORIZED TARGET</p>
+                  <h3 class="panel-title">Web 靶机线索扫描</h3>
                 </div>
                 <span class="scope-badge">GET · SAME ORIGIN</span>
               </div>
 
               <p class="body-copy web-intro">
-                面向本机、虚拟机和私有网段 CTF 靶机。应用会抓取页面、脚本、robots.txt、source map 和响应头，寻找 flag 与高价值入口，不执行页面脚本，也不会提交表单。
+                输入 IP、域名或 host:port。扫描器只进行同源 GET 请求，自动检查页面、脚本、响应头、常见路径和下载附件。
               </p>
 
               <label class="field web-target-field">
-                <span>目标 URL</span>
-                <input id="web-target-input" type="url" placeholder="http://127.0.0.1:8080/" autocomplete="off" spellcheck="false" />
+                <span>靶机地址</span>
+                <input id="web-target-input" type="text" placeholder="127.0.0.1:8080 / 10.10.10.10 / https://ctf.example/challenge" autocomplete="off" spellcheck="false" />
               </label>
 
               <div class="web-options">
@@ -272,14 +272,21 @@
                   <input id="web-authorized-checkbox" type="checkbox" />
                   <span>
                     <strong>我确认这是有权测试的 CTF / 本地靶机</strong>
-                    <small>公网目标默认拒绝，仅允许 localhost、回环地址和私有网段。</small>
+                    <small>默认仅扫描本机、虚拟机和私有网段。</small>
+                  </span>
+                </label>
+                <label class="check-row">
+                  <input id="web-public-checkbox" type="checkbox" />
+                  <span>
+                    <strong>允许公网 CTF 靶机</strong>
+                    <small>仅用于你已获明确授权的比赛靶机；仍限制为同源 GET。</small>
                   </span>
                 </label>
                 <label class="check-row">
                   <input id="web-probe-paths-checkbox" type="checkbox" checked />
                   <span>
                     <strong>检查常见 CTF 路径</strong>
-                    <small>限量检查 robots、sitemap、flag、debug、source、backup 与 .git/HEAD。</small>
+                    <small>限量检查 robots、flag、API、配置、备份、OpenAPI 与 Git 泄露入口。</small>
                   </span>
                 </label>
               </div>
@@ -313,7 +320,7 @@
                 <span>同源范围</span>
                 <span>不执行 JS</span>
                 <span>不提交表单</span>
-                <span>25 秒上限</span>
+                <span>限时限量</span>
               </div>
             </section>
 

@@ -2,7 +2,7 @@ const fs = require("fs");
 const http = require("http");
 const path = require("path");
 const AdmZip = require("adm-zip");
-const { analyzeWebTarget } = require("../desktop/web-analyzer");
+const { analyzeWebTarget, normalizeTargetUrl } = require("../desktop/web-analyzer");
 
 async function main() {
   const expectedFlag = "flag{local_web_crawl_smoke}";
@@ -70,7 +70,7 @@ async function main() {
     fs.mkdirSync(root, { recursive: true });
     const result = await analyzeWebTarget(
       {
-        url: `http://127.0.0.1:${address.port}/`,
+        url: `127.0.0.1:${address.port}/`,
         authorized: true,
         probeCommonPaths: true,
         maxPages: 30,
@@ -101,10 +101,13 @@ async function main() {
     try {
       await analyzeWebTarget({ url: "https://example.com", authorized: true }, path.join(root, "public-denied"));
     } catch (error) {
-      publicDenied = /仅允许 localhost|私有网段/.test(error.message);
+      publicDenied = /公网|允许公网靶机/.test(error.message);
     }
     if (!publicDenied) {
       throw new Error("public target should be denied by default");
+    }
+    if (normalizeTargetUrl("10.10.10.10:8080/path") !== "http://10.10.10.10:8080/path") {
+      throw new Error("scheme-less target normalization failed");
     }
     console.log(
       JSON.stringify(

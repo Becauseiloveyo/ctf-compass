@@ -21,8 +21,16 @@ const COMMON_CTF_PATHS = [
   "/admin",
   "/debug",
   "/source",
+  "/api",
+  "/api/status",
+  "/.env",
+  "/config",
+  "/swagger.json",
+  "/openapi.json",
+  "/graphql",
   "/backup.zip",
   "/.git/HEAD",
+  "/.git/config",
 ];
 
 const FLAG_PATTERNS = [
@@ -57,18 +65,29 @@ function isPrivateAddress(address) {
   return version === 4 ? isPrivateIPv4(address) : version === 6 ? isPrivateIPv6(address) : false;
 }
 
-async function validateLocalTarget(targetUrl) {
+function normalizeTargetUrl(targetUrl) {
+  const value = String(targetUrl || "").trim();
+  if (!value) {
+    throw new Error("请输入靶机地址，例如 127.0.0.1:3000、10.10.10.10:8080 或 https://ctf.example/challenge。");
+  }
+  if (/^\/\//.test(value)) {
+    return `http:${value}`;
+  }
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `http://${value}`;
+}
+
+async function validateWebTarget(targetUrl, options = {}) {
   let parsed;
   try {
-    parsed = new URL(String(targetUrl || "").trim());
+    parsed = new URL(normalizeTargetUrl(targetUrl));
   } catch (_error) {
-    throw new Error("请输入完整 URL，例如 http://127.0.0.1:3000。");
+    throw new Error("靶机地址格式无效。支持 IP、域名、host:port 和完整 HTTP/HTTPS URL。");
   }
   if (!["http:", "https:"].includes(parsed.protocol)) {
     throw new Error("Web 分析仅支持 HTTP/HTTPS。");
   }
   if (parsed.username || parsed.password) {
-    throw new Error("URL 中不能包含账号或密码，请使用靶场自身登录流程。");
+    throw new Error("地址中不能包含账号或密码，请使用靶机自身的登录流程。");
   }
   const host = parsed.hostname.toLowerCase();
   let addresses = [];
@@ -83,11 +102,15 @@ async function validateLocalTarget(targetUrl) {
       throw new Error(`无法解析目标主机：${error.message}`);
     }
   }
-  if (!addresses.length || addresses.some((address) => !isPrivateAddress(address))) {
-    throw new Error("主动 Web 分析仅允许 localhost、回环地址和私有网段靶机。");
+  if (!addresses.length) {
+    throw new Error("目标主机没有可用地址。");
+  }
+  const publicTarget = addresses.some((address) => !isPrivateAddress(address));
+  if (publicTarget && !options.allowPublic) {
+    throw new Error("该地址解析到公网。请仅在确认它是获授权的 CTF 靶机后，启用“允许公网靶机”。");
   }
   parsed.hash = "";
-  return { url: parsed, addresses: dedupe(addresses) };
+  return { url: parsed, addresses: dedupe(addresses), publicTarget };
 }
 
 function isTextContentType(contentType) {
@@ -199,10 +222,10 @@ function headerObject(headers) {
   return result;
 }
 
-async function fetchLocalPage(url, origin, limits) {
+async function fetchLocalPage(url, origin, limits, scope = {}) {
   let current = new URL(url);
   for (let redirect = 0; redirect < 5; redirect += 1) {
-    await validateLocalTarget(current.href);
+    await validateWebTarget(current.href, scope);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), limits.requestTimeoutMs);
     let response;
@@ -301,7 +324,7 @@ function shouldSaveResponse(pageUrl, contentType, headers, body) {
 
 function buildMarkdownReport(result) {
   const lines = [
-    "# CTF COMPASS LOCAL WEB REPORT",
+    "# CTF COMPASS AUTHORIZED WEB REPORT",
     "",
     `- Target: ${result.target}`,
     `- Resolved: ${result.resolvedAddresses.join(", ")}`,
@@ -337,7 +360,8 @@ async function analyzeWebTarget(payload, outputRoot) {
   if (!payload?.authorized) {
     throw new Error("请先确认该目标是你有权测试的本地靶机或 CTF 环境。");
   }
-  const validated = await validateLocalTarget(payload.url);
+  const scope = { allowPublic: Boolean(payload.allowPublic) };
+  const validated = await validateWebTarget(payload.url, scope);
   const limits = {
     ...DEFAULT_LIMITS,
     maxPages: Math.max(1, Math.min(Number(payload.maxPages) || DEFAULT_LIMITS.maxPages, 60)),
@@ -364,7 +388,7 @@ async function analyzeWebTarget(payload, outputRoot) {
     if (!item || seen.has(item.url)) continue;
     seen.add(item.url);
     try {
-      const fetched = await fetchLocalPage(item.url, origin, limits);
+      const fetched = await fetchLocalPage(item.url, origin, limits, scope);
       const text = isTextContentType(fetched.contentType) ? fetched.body.toString("utf8") : "";
       const clues = text ? extractWebClues(text, fetched.url, fetched.contentType, origin) : { urls: [], comments: [], forms: [], routeCandidates: [], sourceMaps: [] };
       const page = {
@@ -393,7 +417,10 @@ async function analyzeWebTarget(payload, outputRoot) {
       flagCandidates.push(...extractFlagCandidates(Object.entries(fetched.headers).map(([key, value]) => `${key}: ${value}`).join("\n"), `${fetched.url} headers`));
       discoveredUrls.push(...clues.urls);
       if (item.depth < limits.maxDepth) {
-        clues.urls.forEach((url) => queue.push({ url, depth: item.depth + 1, reason: "crawl" }));
+        clues.urls
+          .slice()
+          .reverse()
+          .forEach((url) => queue.unshift({ url, depth: item.depth + 1, reason: "crawl" }));
       }
     } catch (error) {
       errors.push({ url: item.url, message: error.message });
@@ -454,7 +481,9 @@ async function analyzeWebTarget(payload, outputRoot) {
     flagCandidates: uniqueFlags.slice(0, 40),
     nextSteps: dedupe(nextSteps),
     scope: {
-      localOnly: true,
+      localOnly: !scope.allowPublic,
+      publicTarget: validated.publicTarget,
+      publicAuthorized: Boolean(scope.allowPublic && validated.publicTarget),
       sameOrigin: true,
       methods: ["GET"],
       executedJavaScript: false,
@@ -472,5 +501,7 @@ async function analyzeWebTarget(payload, outputRoot) {
 
 module.exports = {
   analyzeWebTarget,
-  validateLocalTarget,
+  normalizeTargetUrl,
+  validateWebTarget,
+  validateLocalTarget: (targetUrl) => validateWebTarget(targetUrl, { allowPublic: false }),
 };
