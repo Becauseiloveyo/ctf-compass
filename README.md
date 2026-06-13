@@ -105,7 +105,7 @@ npm run dist:dir
 
 The unpacked Windows app will be written to `release/win-unpacked/`.
 
-A downloadable zip can be created from the unpacked build. The current local package name is `release/CTF-Compass-0.9.0-win-x64.zip`.
+A downloadable zip can be created from the unpacked build. The current local package name is `release/CTF-Compass-0.9.1-win-x64.zip`.
 
 Run local analyzer regressions:
 
