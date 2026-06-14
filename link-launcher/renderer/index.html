@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Link Launcher</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="rail">
+        <div class="brand">
+          <div class="brand-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" />
+              <path d="M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20.1l1.1-1.1" />
+            </svg>
+          </div>
+          <div>
+            <p>本地跳转器</p>
+            <h1>Link Launcher</h1>
+          </div>
+        </div>
+
+        <nav class="rail-nav" aria-label="平台筛选">
+          <button class="rail-button active" type="button" data-filter="all">全部</button>
+          <button class="rail-button" type="button" data-filter="12306">12306</button>
+          <button class="rail-button" type="button" data-filter="taobao">淘宝/天猫</button>
+          <button class="rail-button" type="button" data-filter="jd">京东</button>
+          <button class="rail-button" type="button" data-filter="pdd">拼多多</button>
+        </nav>
+
+        <div class="rail-note">
+          <strong>边界</strong>
+          <p>普通商品链接不会被转换成付款页；只有平台已经生成的待付款订单链接，才可能打开到付款前页面。</p>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="kicker">定点打开官方链接</p>
+            <h2>链接任务</h2>
+          </div>
+          <div class="status" id="status">就绪</div>
+        </header>
+
+        <section class="grid">
+          <form class="panel composer" id="task-form">
+            <div class="panel-head">
+              <div>
+                <p class="kicker">新建</p>
+                <h3>跳转目标</h3>
+              </div>
+              <button class="ghost-button" type="button" id="reset-form-button">清空</button>
+            </div>
+
+            <div class="field-grid">
+              <label class="field">
+                <span>名称</span>
+                <input id="task-name" type="text" placeholder="例如：京东显卡待付款订单" autocomplete="off" />
+              </label>
+
+              <label class="field">
+                <span>平台</span>
+                <select id="task-platform">
+                  <option value="general">通用</option>
+                  <option value="12306">12306</option>
+                  <option value="taobao">淘宝</option>
+                  <option value="tmall">天猫</option>
+                  <option value="jd">京东</option>
+                  <option value="pdd">拼多多</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>链接类型</span>
+                <select id="task-mode">
+                  <option value="normal">普通链接</option>
+                  <option value="unpaid">已有待付款链接</option>
+                  <option value="reservation">预约/候补入口</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>提前打开</span>
+                <input id="task-lead" type="number" min="0" max="600" step="1" value="0" />
+              </label>
+
+              <label class="field field-wide">
+                <span>官方链接或 App URI</span>
+                <input id="task-url" type="url" placeholder="https://... 或 tbopen://..." autocomplete="off" required />
+              </label>
+
+              <label class="field">
+                <span>打开时间</span>
+                <input id="task-time" type="datetime-local" />
+              </label>
+
+              <label class="toggle-row">
+                <input id="task-sound" type="checkbox" checked />
+                <span>声音提醒</span>
+              </label>
+            </div>
+
+            <div class="button-row">
+              <button class="primary-button" type="submit">添加任务</button>
+              <button class="secondary-button" type="button" id="open-now-button">立即打开</button>
+            </div>
+          </form>
+
+          <section class="panel queue">
+            <div class="panel-head">
+              <div>
+                <p class="kicker">队列</p>
+                <h3>待打开</h3>
+              </div>
+              <button class="ghost-button danger" type="button" id="clear-done-button">清理已触发</button>
+            </div>
+            <div class="task-list" id="task-list"></div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>
