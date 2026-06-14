@@ -26,7 +26,7 @@ jobs:
       OLD_REPO: Becauseiloveyo/ctf-compass1
       NEW_REPO: Becauseiloveyo/ctf-compass
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      OVERWRITE: ${{ inputs.overwrite || 'true' }}
+      OVERWRITE: ${{ github.event_name == 'workflow_dispatch' && inputs.overwrite || 'true' }}
 
     steps:
       - name: Migrate release assets and notes
@@ -35,26 +35,34 @@ jobs:
           set -euo pipefail
 
           mkdir -p migrated-releases
-          mapfile -t tags < <(gh release list --repo "$OLD_REPO" --limit 100 --json tagName --jq '.[].tagName' | sort -V)
+          curl -fsSL "https://api.github.com/repos/${OLD_REPO}/releases?per_page=100" > migrated-releases/releases.json
 
-          if [ "${#tags[@]}" -eq 0 ]; then
+          release_count=$(jq 'length' migrated-releases/releases.json)
+          if [ "$release_count" -eq 0 ]; then
             echo "No releases found in $OLD_REPO"
             exit 1
           fi
 
-          echo "Found ${#tags[@]} release(s): ${tags[*]}"
+          latest_tag=$(jq -r '.[0].tag_name' migrated-releases/releases.json)
+          echo "Found ${release_count} release(s). Latest source release: ${latest_tag}"
 
-          latest_tag="${tags[-1]}"
+          jq -c 'reverse[]' migrated-releases/releases.json | while read -r release_json; do
+            tag=$(jq -r '.tag_name' <<< "$release_json")
+            name=$(jq -r '.name // .tag_name' <<< "$release_json")
+            body=$(jq -r '.body // ""' <<< "$release_json")
+            prerelease=$(jq -r '.prerelease' <<< "$release_json")
+            draft=$(jq -r '.draft' <<< "$release_json")
 
-          for tag in "${tags[@]}"; do
+            if [ "$draft" = "true" ]; then
+              echo "Skipping draft release $tag"
+              continue
+            fi
+
             echo "--- Migrating $tag ---"
-            mkdir -p "migrated-releases/$tag/assets"
-
-            gh release view "$tag" --repo "$OLD_REPO" --json tagName,name,body,isPrerelease,isDraft,isLatest > "migrated-releases/$tag/meta.json"
-
-            name=$(jq -r '.name // .tagName' "migrated-releases/$tag/meta.json")
-            body=$(jq -r '.body // ""' "migrated-releases/$tag/meta.json")
-            prerelease=$(jq -r '.isPrerelease' "migrated-releases/$tag/meta.json")
+            release_dir="migrated-releases/$tag"
+            asset_dir="$release_dir/assets"
+            mkdir -p "$asset_dir"
+            printf '%s' "$body" > "$release_dir/body.md"
 
             if gh release view "$tag" --repo "$NEW_REPO" >/dev/null 2>&1; then
               if [ "$OVERWRITE" = "true" ]; then
@@ -66,14 +74,18 @@ jobs:
               fi
             fi
 
-            # Download all assets from the old repository. Some releases may have no assets, so tolerate that case.
-            gh release download "$tag" --repo "$OLD_REPO" --dir "migrated-releases/$tag/assets" || true
+            jq -c '.assets[]?' <<< "$release_json" | while read -r asset_json; do
+              asset_name=$(jq -r '.name' <<< "$asset_json")
+              asset_url=$(jq -r '.browser_download_url' <<< "$asset_json")
+              echo "Downloading $asset_name"
+              curl -fL --retry 3 --retry-delay 2 -o "$asset_dir/$asset_name" "$asset_url"
+            done
 
             shopt -s nullglob
-            assets=("migrated-releases/$tag/assets"/*)
+            assets=("$asset_dir"/*)
             shopt -u nullglob
 
-            create_args=(release create "$tag" --repo "$NEW_REPO" --target main --title "$name" --notes "$body")
+            create_args=(release create "$tag" --repo "$NEW_REPO" --target main --title "$name" --notes-file "$release_dir/body.md")
             if [ "$prerelease" = "true" ]; then
               create_args+=(--prerelease)
             fi
@@ -91,3 +103,5 @@ jobs:
           done
 
           echo "Release migration complete."
+
+# Trigger migration using public source-release reads.
