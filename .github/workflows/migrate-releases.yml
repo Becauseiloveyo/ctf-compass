@@ -1,0 +1,93 @@
+name: Migrate releases
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/migrate-releases.yml"
+  workflow_dispatch:
+    inputs:
+      overwrite:
+        description: "Delete and recreate releases that already exist"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    env:
+      OLD_REPO: Becauseiloveyo/ctf-compass1
+      NEW_REPO: Becauseiloveyo/ctf-compass
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      OVERWRITE: ${{ inputs.overwrite || 'true' }}
+
+    steps:
+      - name: Migrate release assets and notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p migrated-releases
+          mapfile -t tags < <(gh release list --repo "$OLD_REPO" --limit 100 --json tagName --jq '.[].tagName' | sort -V)
+
+          if [ "${#tags[@]}" -eq 0 ]; then
+            echo "No releases found in $OLD_REPO"
+            exit 1
+          fi
+
+          echo "Found ${#tags[@]} release(s): ${tags[*]}"
+
+          latest_tag="${tags[-1]}"
+
+          for tag in "${tags[@]}"; do
+            echo "--- Migrating $tag ---"
+            mkdir -p "migrated-releases/$tag/assets"
+
+            gh release view "$tag" --repo "$OLD_REPO" --json tagName,name,body,isPrerelease,isDraft,isLatest > "migrated-releases/$tag/meta.json"
+
+            name=$(jq -r '.name // .tagName' "migrated-releases/$tag/meta.json")
+            body=$(jq -r '.body // ""' "migrated-releases/$tag/meta.json")
+            prerelease=$(jq -r '.isPrerelease' "migrated-releases/$tag/meta.json")
+
+            if gh release view "$tag" --repo "$NEW_REPO" >/dev/null 2>&1; then
+              if [ "$OVERWRITE" = "true" ]; then
+                echo "Existing release $tag found; deleting it before migration."
+                gh release delete "$tag" --repo "$NEW_REPO" --cleanup-tag --yes
+              else
+                echo "Existing release $tag found; skipping because overwrite=false."
+                continue
+              fi
+            fi
+
+            # Download all assets from the old repository. Some releases may have no assets, so tolerate that case.
+            gh release download "$tag" --repo "$OLD_REPO" --dir "migrated-releases/$tag/assets" || true
+
+            shopt -s nullglob
+            assets=("migrated-releases/$tag/assets"/*)
+            shopt -u nullglob
+
+            create_args=(release create "$tag" --repo "$NEW_REPO" --target main --title "$name" --notes "$body")
+            if [ "$prerelease" = "true" ]; then
+              create_args+=(--prerelease)
+            fi
+            if [ "$tag" = "$latest_tag" ]; then
+              create_args+=(--latest=true)
+            else
+              create_args+=(--latest=false)
+            fi
+
+            if [ "${#assets[@]}" -gt 0 ]; then
+              gh "${create_args[@]}" "${assets[@]}"
+            else
+              gh "${create_args[@]}"
+            fi
+          done
+
+          echo "Release migration complete."
