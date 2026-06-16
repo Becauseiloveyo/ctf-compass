@@ -1,0 +1,56 @@
+name: Release preview
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-preview:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run desktop smoke test
+        run: npm run smoke:desktop
+
+      - name: Build zip
+        run: npm run dist:zip
+
+      - name: Upload preview artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CTF-Compass-preview-windows
+          path: release/*.zip
+          if-no-files-found: error
+
+      - name: Publish latest preview release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ctf-compass-preview-latest
+          name: CTF Compass 最新预览版
+          body: |
+            自动构建的 Windows 预览包。
+
+            - 分支：main
+            - 提交：${{ github.sha }}
+            - 版本：v0.9.2
+          artifacts: release/*.zip
+          allowUpdates: true
+          replacesArtifacts: true
+          removeArtifacts: true
+          artifactErrorsFailBuild: true
