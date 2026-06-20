@@ -4756,6 +4756,73 @@ function parseHttpPayload(buffer) {
   return result;
 }
 
+function parseHttpMultipartParts(http) {
+  const contentType = String(http?.headers?.["content-type"] || "");
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;\s]+))/i);
+  const body = http?.bodyBuffer || Buffer.alloc(0);
+  if (!boundaryMatch || !body.length) {
+    return [];
+  }
+
+  const boundary = Buffer.from(`--${boundaryMatch[1] || boundaryMatch[2]}`, "utf8");
+  const parts = [];
+  let cursor = body.indexOf(boundary);
+
+  while (cursor !== -1 && parts.length < 20) {
+    cursor += boundary.length;
+    if (body[cursor] === 0x2d && body[cursor + 1] === 0x2d) {
+      break;
+    }
+    if (body[cursor] === 0x0d && body[cursor + 1] === 0x0a) {
+      cursor += 2;
+    } else if (body[cursor] === 0x0a) {
+      cursor += 1;
+    }
+
+    const headerEndCrlf = body.indexOf(Buffer.from("\r\n\r\n"), cursor);
+    const headerEndLf = body.indexOf(Buffer.from("\n\n"), cursor);
+    const headerEnd =
+      headerEndCrlf !== -1 && (headerEndLf === -1 || headerEndCrlf < headerEndLf)
+        ? headerEndCrlf
+        : headerEndLf;
+    if (headerEnd === -1) {
+      break;
+    }
+
+    const delimiterLength = headerEnd === headerEndCrlf ? 4 : 2;
+    const nextBoundary = body.indexOf(boundary, headerEnd + delimiterLength);
+    if (nextBoundary === -1) {
+      break;
+    }
+
+    const headerText = body.subarray(cursor, headerEnd).toString("latin1");
+    let content = body.subarray(headerEnd + delimiterLength, nextBoundary);
+    if (content.length >= 2 && content[content.length - 2] === 0x0d && content[content.length - 1] === 0x0a) {
+      content = content.subarray(0, content.length - 2);
+    } else if (content.length >= 1 && content[content.length - 1] === 0x0a) {
+      content = content.subarray(0, content.length - 1);
+    }
+
+    const disposition = headerText.match(/^content-disposition:\s*([^\r\n]+)/im)?.[1] || "";
+    const fieldName = disposition.match(/\bname="([^"]+)"/i)?.[1] || disposition.match(/\bname=([^;\s]+)/i)?.[1] || "";
+    const fileName = disposition.match(/\bfilename="([^"]*)"/i)?.[1] || disposition.match(/\bfilename=([^;\s]*)/i)?.[1] || "";
+    const partType = headerText.match(/^content-type:\s*([^\r\n]+)/im)?.[1]?.trim() || "";
+
+    if (fieldName || fileName || content.length) {
+      parts.push({
+        fieldName,
+        fileName,
+        contentType: partType,
+        content,
+      });
+    }
+
+    cursor = nextBoundary;
+  }
+
+  return parts;
+}
+
 function normalizeSessionKey(packet) {
   const left = `${packet.srcIp}:${packet.srcPort}`;
   const right = `${packet.dstIp}:${packet.dstPort}`;
@@ -4944,6 +5011,18 @@ function analyzeTrafficBuffer(buffer) {
             content: body,
           });
         }
+        parseHttpMultipartParts(http).forEach((part, partIndex) => {
+          if (summary.exportedObjects.length >= MAX_HTTP_OBJECTS) {
+            return;
+          }
+          const originalName = part.fileName || part.fieldName || `part-${partIndex + 1}`;
+          const safeName = sanitizeSegment(originalName) || `part-${partIndex + 1}`;
+          const suffix = part.fileName ? safeName : `${safeName}.txt`;
+          summary.exportedObjects.push({
+            name: `${baseName}-multipart-${String(partIndex + 1).padStart(2, "0")}-${suffix}`,
+            content: part.content,
+          });
+        });
       }
       return;
     }

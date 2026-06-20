@@ -821,6 +821,106 @@ function createUsbMixedPcap(filePath) {
   return filePath;
 }
 
+function checksum16(buffer) {
+  let sum = 0;
+  for (let offset = 0; offset < buffer.length; offset += 2) {
+    sum += buffer.readUInt16BE(offset);
+    while (sum > 0xffff) {
+      sum = (sum & 0xffff) + (sum >>> 16);
+    }
+  }
+  return (~sum) & 0xffff;
+}
+
+function createEthernetIpv4TcpFrame(payload, options = {}) {
+  const srcIp = options.srcIp || [10, 0, 0, 2];
+  const dstIp = options.dstIp || [10, 0, 0, 3];
+  const srcPort = options.srcPort || 49152;
+  const dstPort = options.dstPort || 80;
+  const sequence = options.sequence || 1;
+  const ethernet = Buffer.from([
+    0x02, 0x00, 0x00, 0x00, 0x00, 0x03,
+    0x02, 0x00, 0x00, 0x00, 0x00, 0x02,
+    0x08, 0x00,
+  ]);
+  const ip = Buffer.alloc(20);
+  ip[0] = 0x45;
+  ip.writeUInt16BE(ip.length + 20 + payload.length, 2);
+  ip.writeUInt16BE(0x3456, 4);
+  ip[8] = 64;
+  ip[9] = 6;
+  Buffer.from(srcIp).copy(ip, 12);
+  Buffer.from(dstIp).copy(ip, 16);
+  ip.writeUInt16BE(checksum16(ip), 10);
+
+  const tcp = Buffer.alloc(20);
+  tcp.writeUInt16BE(srcPort, 0);
+  tcp.writeUInt16BE(dstPort, 2);
+  tcp.writeUInt32BE(sequence, 4);
+  tcp[12] = 0x50;
+  tcp[13] = 0x18;
+  tcp.writeUInt16BE(65535, 14);
+  const pseudo = Buffer.concat([
+    Buffer.from(srcIp),
+    Buffer.from(dstIp),
+    Buffer.from([0, 6]),
+    Buffer.from([(tcp.length + payload.length) >> 8, (tcp.length + payload.length) & 0xff]),
+    tcp,
+    payload,
+    payload.length % 2 ? Buffer.from([0]) : Buffer.alloc(0),
+  ]);
+  tcp.writeUInt16BE(checksum16(pseudo), 16);
+  return Buffer.concat([ethernet, ip, tcp, payload]);
+}
+
+function createHttpMultipartUploadPcap(filePath, flag) {
+  const boundary = "----ctfcompass-smoke-boundary";
+  const body = Buffer.from(
+    [
+      `--${boundary}`,
+      `Content-Disposition: form-data; name="comment"`,
+      "",
+      "traffic upload smoke",
+      `--${boundary}`,
+      `Content-Disposition: form-data; name="file"; filename="flag.txt"`,
+      "Content-Type: text/plain",
+      "",
+      `${flag}\n`,
+      `--${boundary}--`,
+      "",
+    ].join("\r\n"),
+    "utf8",
+  );
+  const request = Buffer.concat([
+    Buffer.from(
+      [
+        "POST /upload HTTP/1.1",
+        "Host: upload.ctf.local",
+        `Content-Type: multipart/form-data; boundary=${boundary}`,
+        `Content-Length: ${body.length}`,
+        "",
+        "",
+      ].join("\r\n"),
+      "utf8",
+    ),
+    body,
+  ]);
+  const frame = createEthernetIpv4TcpFrame(request);
+  const globalHeader = Buffer.alloc(24);
+  globalHeader.writeUInt32LE(0xa1b2c3d4, 0);
+  globalHeader.writeUInt16LE(2, 4);
+  globalHeader.writeUInt16LE(4, 6);
+  globalHeader.writeUInt32LE(65535, 16);
+  globalHeader.writeUInt32LE(1, 20);
+  const packetHeader = Buffer.alloc(16);
+  packetHeader.writeUInt32LE(Math.floor(Date.now() / 1000), 0);
+  packetHeader.writeUInt32LE(frame.length, 8);
+  packetHeader.writeUInt32LE(frame.length, 12);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, Buffer.concat([globalHeader, packetHeader, frame]));
+  return filePath;
+}
+
 function reverseByteBits(value) {
   let result = 0;
   for (let bit = 0; bit < 8; bit += 1) {
@@ -1766,6 +1866,24 @@ async function main() {
       icmpFlag,
       "-traffic-summary.txt",
       /ICMP payload[\s\S]*flag\{icmp_covert_smoke\}/,
+    ),
+  );
+
+  const multipartFlag = "flag{http_multipart_upload_smoke}";
+  const multipartPath = createHttpMultipartUploadPcap(path.join(root, "input", "http-upload.pcap"), multipartFlag);
+  results.push(
+    await runReportFlagCase(
+      root,
+      "http-multipart-upload",
+      {
+        title: "HTTP multipart upload smoke",
+        description: "Recover uploaded multipart/form-data files from local traffic captures.",
+        tags: ["forensic", "pcap", "http", "upload"],
+        artifacts: [multipartPath],
+      },
+      multipartFlag,
+      "-traffic-summary.txt",
+      /POST upload\.ctf\.local\/upload/,
     ),
   );
 

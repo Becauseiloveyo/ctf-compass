@@ -1,5 +1,7 @@
 # CTF Compass
 
+[简体中文说明](README.zh-CN.md)
+
 CTF Compass is a safe, extensible desktop app for lawful CTF practice. It is designed around a file-first workflow: challenge statements, images, text files, archives, binaries, and traffic captures are treated as first-class inputs instead of optional notes.
 
 ## Scope
@@ -105,7 +107,7 @@ npm run dist:dir
 
 The unpacked Windows app will be written to `release/win-unpacked/`.
 
-A downloadable zip can be created from the unpacked build. The current local package name is `release/CTF-Compass-0.9.1-win-x64.zip`.
+A downloadable zip can be created from the unpacked build. The current local package name is `release/CTF-Compass-0.9.2-win-x64.zip`.
 
 Run local analyzer regressions:
 
