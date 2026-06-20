@@ -12,8 +12,8 @@ CTF Compass 是一个面向合法 CTF 训练和比赛的桌面附件分析工作
 ## 主要能力
 
 - 杂项与取证：文件魔数识别、strings、嵌入文件扫描、ZIP/GZIP/TAR/TGZ 递归解包、伪加密 ZIP 修复、PNG 文本块、PNG/BMP LSB、indexed PNG 调色板索引 LSB、GIF 注释和描述符位流、JPEG COM/XMP/APP 段、MP4 隐藏轨道和 chunk 表修复。
-- 流量分析：pcap/pcapng 基础解析、HTTP/DNS/TLS SNI、Cookie/Token、HTTP 对象导出、multipart/form-data 上传文件提取、TCP/UDP 方向流重组、TFTP DATA 分块重组、ICMP/DNS/IP 隐蔽信道候选、USB HID 键盘/鼠标/手柄恢复。
-- 编码与密码：Base64/Base58/Base91/Base32、Hex、Ascii85/Z85、Base64URL/JWT payload、URL 编码、Quoted-Printable、UUEncode、A1Z26、NATO、Morse、Polybius、Bacon、Brainfuck/Ook、零宽/空白隐写、ROT/Caesar、Affine、Rail Fence、单字节 XOR、常见 RSA 参数弱点。
+- 流量分析：pcap/pcapng 基础解析、HTTP/DNS/TLS SNI、HTTP Basic 凭据解码、Cookie/Token、HTTP 对象导出、multipart/form-data 上传文件提取、FTP 控制流命令和凭据提取、SMTP/MIME base64 附件提取、TCP/UDP 方向流重组、TFTP DATA 分块重组、ICMP/DNS/IP 隐蔽信道候选、USB HID 键盘/鼠标/手柄恢复。
+- 编码与密码：Base64/Base58/Base91/Base32、Hex、Ascii85/Z85、Base64URL/JWT payload、JWT `alg=none` CTF 变体候选、URL 编码、Quoted-Printable、UUEncode、A1Z26、NATO、Morse、Polybius、Bacon、Brainfuck/Ook、零宽/空白隐写、ROT/Caesar、Affine、Rail Fence、单字节 XOR、常见 RSA 参数弱点。
 - 逆向与 Pwn：ELF/PE/APK 基础结构、导入导出、strings、checksec-lite、seccomp-BPF、core dump 摘要、危险函数、I/O/网络/堆/沙箱画像、ROP gadget 候选、AArch64/ARM/MIPS/RISC-V 轻量 gadget 扫描。
 - Web 靶机：在授权前提下对本地、私网或明确授权的 CTF 目标做同源 GET 扫描，提取路由、脚本、注释、响应头、表单、source map、下载附件和直接 flag 候选。
 

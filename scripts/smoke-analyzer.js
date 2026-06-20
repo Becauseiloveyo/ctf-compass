@@ -1027,6 +1027,65 @@ function createTftpDataPcap(filePath, flag) {
   return writeEthernetPcap(filePath, frames);
 }
 
+function createFtpControlPcap(filePath, flag) {
+  const control = Buffer.from(
+    [
+      "220 ctf ftp ready",
+      "USER player",
+      `PASS ${flag}`,
+      "230 login ok",
+      "TYPE I",
+      "PASV",
+      "227 Entering Passive Mode (10,0,0,3,195,80)",
+      "RETR clue.txt",
+      "150 opening data",
+      "226 transfer complete",
+      "QUIT",
+      "",
+    ].join("\r\n"),
+    "utf8",
+  );
+  const frame = createEthernetIpv4TcpFrame(control, { srcPort: 49160, dstPort: 21 });
+  return writeEthernetPcap(filePath, [frame]);
+}
+
+function createSmtpMimePcap(filePath, flag) {
+  const boundary = "ctfcompass-mail-boundary";
+  const encoded = Buffer.from(`${flag}\n`, "utf8").toString("base64");
+  const mail = Buffer.from(
+    [
+      "220 mail.ctf.local ESMTP",
+      "EHLO player",
+      "MAIL FROM:<player@ctf.local>",
+      "RCPT TO:<judge@ctf.local>",
+      "DATA",
+      "From: player@ctf.local",
+      "To: judge@ctf.local",
+      "Subject: evidence package",
+      "MIME-Version: 1.0",
+      `Content-Type: multipart/mixed; boundary=\"${boundary}\"`,
+      "",
+      `--${boundary}`,
+      "Content-Type: text/plain",
+      "",
+      "See attached evidence.",
+      `--${boundary}`,
+      "Content-Type: text/plain; name=\"flag.txt\"",
+      "Content-Disposition: attachment; filename=\"flag.txt\"",
+      "Content-Transfer-Encoding: base64",
+      "",
+      encoded,
+      `--${boundary}--`,
+      ".",
+      "250 accepted",
+      "",
+    ].join("\r\n"),
+    "utf8",
+  );
+  const frame = createEthernetIpv4TcpFrame(mail, { srcPort: 49161, dstPort: 25 });
+  return writeEthernetPcap(filePath, [frame]);
+}
+
 function base64UrlEncodeJson(value) {
   return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
 }
@@ -2037,6 +2096,42 @@ async function main() {
       tftpFlag,
       "-traffic-summary.txt",
       /TFTP data[\s\S]*flag\{tftp_data_smoke\}/,
+    ),
+  );
+
+  const ftpFlag = "flag{ftp_control_password_smoke}";
+  const ftpPath = createFtpControlPcap(path.join(root, "input", "ftp-control.pcap"), ftpFlag);
+  results.push(
+    await runReportFlagCase(
+      root,
+      "ftp-control-credentials",
+      {
+        title: "FTP control credential smoke",
+        description: "Surface FTP USER/PASS and file commands from a control stream.",
+        tags: ["forensic", "pcap", "ftp"],
+        artifacts: [ftpPath],
+      },
+      ftpFlag,
+      "-traffic-summary.txt",
+      /# FTP[\s\S]*credential player:flag\{ftp_control_password_smoke\}[\s\S]*RETR clue\.txt/,
+    ),
+  );
+
+  const smtpFlag = "flag{smtp_mime_attachment_smoke}";
+  const smtpPath = createSmtpMimePcap(path.join(root, "input", "smtp-mail.pcap"), smtpFlag);
+  results.push(
+    await runReportFlagCase(
+      root,
+      "smtp-mime-attachment",
+      {
+        title: "SMTP MIME attachment smoke",
+        description: "Extract base64 MIME attachments from SMTP-like streams.",
+        tags: ["forensic", "pcap", "smtp", "mail"],
+        artifacts: [smtpPath],
+      },
+      smtpFlag,
+      "-traffic-summary.txt",
+      /# MAIL[\s\S]*attachment flag\.txt/,
     ),
   );
 

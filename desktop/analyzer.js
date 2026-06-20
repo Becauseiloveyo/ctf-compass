@@ -1665,6 +1665,45 @@ function decodeBase64UrlToBuffer(value) {
   return Buffer.from(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="), "base64");
 }
 
+function encodeBase64UrlJson(value) {
+  return Buffer.from(JSON.stringify(value), "utf8")
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+}
+
+function parseJsonObjectText(text) {
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function buildJwtNoneCandidates(headerText, payloadText) {
+  const header = parseJsonObjectText(headerText);
+  const payload = parseJsonObjectText(payloadText);
+  if (!header || !payload) {
+    return [];
+  }
+
+  const variants = [];
+  const noneHeader = { ...header, alg: "none" };
+  const pushVariant = (label, nextPayload) => {
+    variants.push(`${label}: ${encodeBase64UrlJson(noneHeader)}.${encodeBase64UrlJson(nextPayload)}.`);
+  };
+  pushVariant("alg-none same-payload candidate", payload);
+  if (payload.role && payload.role !== "admin") {
+    pushVariant("alg-none role=admin candidate", { ...payload, role: "admin" });
+  }
+  if (payload.isAdmin === false || payload.admin === false) {
+    pushVariant("alg-none admin=true candidate", { ...payload, isAdmin: true, admin: true });
+  }
+  return variants.slice(0, 3);
+}
+
 function collectJwtDecodes(text, bucket) {
   const matches = dedupeStrings(
     Array.from(
@@ -1679,7 +1718,8 @@ function collectJwtDecodes(text, bucket) {
     try {
       const header = decodeBase64UrlToBuffer(parts[0]).toString("utf8");
       const payload = decodeBase64UrlToBuffer(parts[1]).toString("utf8");
-      const decoded = [`JWT ${index + 1}`, "header:", header, "payload:", payload].join("\n");
+      const variants = buildJwtNoneCandidates(header, payload);
+      const decoded = [`JWT ${index + 1}`, "header:", header, "payload:", payload, ...variants].join("\n");
       addDerivedTextResult(bucket, "jwt", `JWT payload ${index + 1}`, decoded, { scoreBoost: 3 });
     } catch (_error) {
       // ignore malformed token candidates
@@ -4970,6 +5010,151 @@ function parseHttpMultipartParts(http) {
   return parts;
 }
 
+function decodeHttpBasicAuth(value) {
+  const match = String(value || "").match(/^basic\s+([A-Za-z0-9+/=]+)$/i);
+  if (!match) {
+    return "";
+  }
+  try {
+    const decoded = Buffer.from(match[1], "base64").toString("utf8").replace(/\0/g, "").trim();
+    return /^[^\s:]{1,128}:.{1,512}$/.test(decoded) ? decoded : "";
+  } catch (_error) {
+    return "";
+  }
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function parseFtpControlText(text) {
+  const lines = String(text || "")
+    .replace(/\0/g, "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 200);
+  const ftpLines = lines.filter((line) =>
+    /^(?:USER|PASS|RETR|STOR|LIST|NLST|CWD|PWD|TYPE|SYST|FEAT|PASV|EPSV|PORT|EPRT|QUIT|NOOP)\b/i.test(line) ||
+    /^\d{3}[- ]/.test(line),
+  );
+  if (ftpLines.length < 2) {
+    return null;
+  }
+
+  let lastUser = "";
+  const credentials = [];
+  const files = [];
+  ftpLines.forEach((line) => {
+    const user = line.match(/^USER\s+(.+)$/i)?.[1]?.trim();
+    if (user) {
+      lastUser = user;
+      return;
+    }
+    const pass = line.match(/^PASS\s+(.+)$/i)?.[1]?.trim();
+    if (pass) {
+      credentials.push(lastUser ? `${lastUser}:${pass}` : `password:${pass}`);
+      return;
+    }
+    const file = line.match(/^(?:RETR|STOR)\s+(.+)$/i)?.[1]?.trim();
+    if (file) {
+      files.push(file);
+    }
+  });
+
+  return {
+    lines: ftpLines.slice(0, 40),
+    credentials: dedupeStrings(credentials).slice(0, 12),
+    files: dedupeStrings(files).slice(0, 12),
+  };
+}
+
+function getMimeHeaderValue(headers, name) {
+  const match = String(headers || "").match(new RegExp(`^${name}:\\s*([^\\n]+)`, "im"));
+  return match ? match[1].trim() : "";
+}
+
+function extractMimeFilename(headers) {
+  const text = String(headers || "");
+  return (
+    text.match(/\bfilename\*?=(?:"([^"]+)"|([^;\s]+))/i)?.[1] ||
+    text.match(/\bfilename\*?=(?:"([^"]+)"|([^;\s]+))/i)?.[2] ||
+    text.match(/\bname=(?:"([^"]+)"|([^;\s]+))/i)?.[1] ||
+    text.match(/\bname=(?:"([^"]+)"|([^;\s]+))/i)?.[2] ||
+    ""
+  );
+}
+
+function splitMimeSections(text) {
+  const normalized = String(text || "").replace(/\r\n/g, "\n");
+  const boundary = normalized.match(/boundary=(?:"([^"]+)"|([^;\s]+))/i)?.[1] || normalized.match(/boundary=(?:"([^"]+)"|([^;\s]+))/i)?.[2];
+  if (boundary) {
+    return normalized.split(new RegExp(`\\n--${escapeRegExp(boundary)}(?:--)?\\n?`, "g"));
+  }
+  return [normalized];
+}
+
+function extractMimeBase64Parts(text) {
+  const parts = [];
+  splitMimeSections(text).forEach((section) => {
+    if (!/content-transfer-encoding:\s*base64/i.test(section)) {
+      return;
+    }
+    const split = section.search(/\n\s*\n/);
+    if (split === -1) {
+      return;
+    }
+    const headers = section.slice(0, split);
+    const body = section.slice(split).replace(/[^A-Za-z0-9+/=]/g, "");
+    if (body.length < 8) {
+      return;
+    }
+    try {
+      const content = Buffer.from(body, "base64");
+      if (!content.length) {
+        return;
+      }
+      parts.push({
+        fileName: extractMimeFilename(headers),
+        contentType: getMimeHeaderValue(headers, "content-type"),
+        content,
+      });
+    } catch (_error) {
+      // ignore malformed MIME candidates
+    }
+  });
+  return parts.slice(0, 12);
+}
+
+function parseMailStreamText(text) {
+  const normalized = String(text || "").replace(/\0/g, "").replace(/\r\n/g, "\n");
+  if (!/\b(?:MAIL FROM|RCPT TO|DATA|EHLO|HELO|Content-Transfer-Encoding|Subject:|From:|To:)\b/i.test(normalized)) {
+    return null;
+  }
+
+  const headers = normalized.split(/\n\s*\n/)[0] || "";
+  const clues = [];
+  ["from", "to", "subject", "content-type"].forEach((name) => {
+    const value = getMimeHeaderValue(headers, name);
+    if (value) clues.push(`${name}: ${value}`);
+  });
+  const smtpCommands = dedupeStrings(
+    Array.from(normalized.matchAll(/^(?:EHLO|HELO|MAIL FROM|RCPT TO|DATA|AUTH|QUIT)\b[^\n]*/gim)).map((match) => match[0].trim()),
+  ).slice(0, 20);
+  const mimeParts = extractMimeBase64Parts(normalized);
+  const attachments = dedupeStrings(mimeParts.map((part) => part.fileName || part.contentType || "base64-part")).slice(0, 12);
+  if (!clues.length && !smtpCommands.length && !mimeParts.length) {
+    return null;
+  }
+
+  return {
+    clues,
+    smtpCommands,
+    attachments,
+    mimeParts,
+  };
+}
+
 function normalizeSessionKey(packet) {
   const left = `${packet.srcIp}:${packet.srcPort}`;
   const right = `${packet.dstIp}:${packet.dstPort}`;
@@ -5048,6 +5233,10 @@ function analyzeTrafficBuffer(buffer) {
     tlsServerNames: [],
     cookies: [],
     tokens: [],
+    httpBasicCredentials: [],
+    ftpSessions: [],
+    ftpCredentials: [],
+    mailMessages: [],
     sessions: [],
     exportedObjects: [],
     streamObjects: [],
@@ -5152,6 +5341,11 @@ function analyzeTrafficBuffer(buffer) {
       if (http.headers.authorization || http.headers["x-token"] || http.headers.token) {
         summary.tokens.push(http.headers.authorization || http.headers["x-token"] || http.headers.token);
       }
+      const basicCredential = decodeHttpBasicAuth(http.headers.authorization);
+      if (basicCredential) {
+        summary.httpBasicCredentials.push(basicCredential);
+        summary.tokens.push(`HTTP Basic ${basicCredential}`);
+      }
 
       if (summary.exportedObjects.length < MAX_HTTP_OBJECTS) {
         const body = http.bodyBuffer || Buffer.alloc(0);
@@ -5210,12 +5404,48 @@ function analyzeTrafficBuffer(buffer) {
   summary.tlsServerNames = dedupeStrings(summary.tlsServerNames).slice(0, 20);
   summary.cookies = dedupeStrings(summary.cookies).slice(0, 12);
   summary.tokens = dedupeStrings(summary.tokens).slice(0, 12);
+  summary.httpBasicCredentials = dedupeStrings(summary.httpBasicCredentials).slice(0, 12);
   const candidateResults = [];
   const streamObjects = [];
   sessions.forEach((session) => {
     session.directions.forEach((chunks, direction) => {
       const content = reassembleDirectionalChunks(chunks);
       if (content.length < 4) return;
+      const streamText = decodeBufferAsText(content).replace(/\0/g, "");
+      const ftp = parseFtpControlText(streamText);
+      if (ftp) {
+        summary.ftpSessions.push({
+          direction,
+          lines: ftp.lines,
+          files: ftp.files,
+        });
+        summary.ftpCredentials.push(...ftp.credentials);
+        candidateResults.push(
+          ...collectTrafficCandidateResults(Buffer.from([direction, ...ftp.lines, ...ftp.credentials, ...ftp.files].join("\n"), "utf8"), `FTP control ${direction}`),
+        );
+      }
+
+      const mail = parseMailStreamText(streamText);
+      if (mail) {
+        const messageIndex = summary.mailMessages.length + 1;
+        summary.mailMessages.push({
+          direction,
+          clues: mail.clues,
+          smtpCommands: mail.smtpCommands,
+          attachments: mail.attachments,
+        });
+        mail.mimeParts.forEach((part, partIndex) => {
+          const content = part.content.subarray(0, 2 * 1024 * 1024);
+          const baseName = sanitizeSegment(part.fileName || `mail-${messageIndex}-part-${partIndex + 1}`) || `mail-${messageIndex}-part-${partIndex + 1}`;
+          const ext = path.extname(baseName) ? "" : scorePrintableRatio(content) > 0.82 ? ".txt" : ".bin";
+          summary.protocolObjects.push({
+            name: `mail-${String(messageIndex).padStart(3, "0")}-${String(partIndex + 1).padStart(2, "0")}-${baseName}${ext}`,
+            content,
+          });
+          candidateResults.push(...collectTrafficCandidateResults(content, `SMTP MIME part ${baseName}`));
+        });
+      }
+
       const useful = collectTrafficCandidateResults(content, `stream ${direction}`);
       candidateResults.push(...useful);
       if (useful.length || detectMagic(content)) {
@@ -5226,6 +5456,9 @@ function analyzeTrafficBuffer(buffer) {
       }
     });
   });
+  summary.ftpCredentials = dedupeStrings(summary.ftpCredentials).slice(0, 12);
+  summary.ftpSessions = summary.ftpSessions.slice(0, 12);
+  summary.mailMessages = summary.mailMessages.slice(0, 12);
   icmpPayloads.forEach((parts, key) => {
     candidateResults.push(...collectTrafficCandidateResults(Buffer.concat(parts), `ICMP payload ${key}`));
   });
@@ -5303,6 +5536,31 @@ function buildTrafficSummaryText(fileName, summary) {
   if (summary.tokens.length) {
     lines.push("# TOKEN");
     summary.tokens.forEach((item) => lines.push(item));
+    lines.push("");
+  }
+  if (summary.httpBasicCredentials?.length) {
+    lines.push("# HTTP BASIC");
+    summary.httpBasicCredentials.forEach((item) => lines.push(item));
+    lines.push("");
+  }
+  if (summary.ftpSessions?.length || summary.ftpCredentials?.length) {
+    lines.push("# FTP");
+    summary.ftpCredentials.forEach((item) => lines.push(`credential ${item}`));
+    summary.ftpSessions.forEach((session) => {
+      lines.push(`session ${session.direction}`);
+      session.lines.forEach((line) => lines.push(line));
+      session.files.forEach((file) => lines.push(`file ${file}`));
+    });
+    lines.push("");
+  }
+  if (summary.mailMessages?.length) {
+    lines.push("# MAIL");
+    summary.mailMessages.forEach((message) => {
+      lines.push(`session ${message.direction}`);
+      message.smtpCommands.forEach((line) => lines.push(line));
+      message.clues.forEach((line) => lines.push(line));
+      message.attachments.forEach((item) => lines.push(`attachment ${item}`));
+    });
     lines.push("");
   }
   if (summary.sessions.length) {
