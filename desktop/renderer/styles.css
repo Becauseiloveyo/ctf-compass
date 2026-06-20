@@ -645,9 +645,10 @@ body.is-busy .status-banner {
 
 .workspace-primary-panel {
   display: grid;
-  gap: 14px;
+  gap: 12px;
 }
 
+.workspace-brief,
 .workspace-hero-row {
   display: flex;
   align-items: flex-start;
@@ -655,9 +656,39 @@ body.is-busy .status-banner {
   gap: 14px;
 }
 
+.workspace-brief {
+  align-items: center;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
 .workspace-hero-row .body-copy {
   max-width: 760px;
   margin-top: 8px;
+}
+
+.signal-strip {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.signal-chip {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-subtle);
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+body[data-theme="dark"] .signal-chip {
+  background: var(--surface-muted);
 }
 
 .field {
@@ -719,7 +750,7 @@ select:focus {
 
 .dropzone {
   width: 100%;
-  min-height: 116px;
+  min-height: 96px;
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr);
   grid-template-areas:
@@ -729,7 +760,7 @@ select:focus {
   justify-items: start;
   column-gap: 14px;
   row-gap: 4px;
-  padding: 16px;
+  padding: 14px;
   border-radius: var(--radius-md);
   border: 1px dashed var(--line-strong);
   background: var(--surface-subtle);
@@ -817,6 +848,8 @@ select:focus {
 .optional-clues summary small {
   margin-left: auto;
   color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
   line-height: 1.4;
 }
 
@@ -1852,8 +1885,15 @@ body[data-view="web"] .header-actions {
 
   .detail-head,
   .settings-row,
+  .workspace-brief,
   .workbench-hero {
     flex-direction: column;
+  }
+
+  .workspace-brief,
+  .signal-strip {
+    align-items: flex-start;
+    justify-content: flex-start;
   }
 
   .action-menu,

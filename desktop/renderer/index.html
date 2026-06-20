@@ -138,36 +138,16 @@
         <section id="workspace-view" class="view is-active">
           <div class="workspace-layout">
             <section class="panel workspace-primary-panel solve-console">
-              <div class="console-hero">
-                <div class="console-hero-copy">
-                  <p class="panel-kicker">CTF INPUT</p>
-                  <h3>把题目素材放进来，先自动拆解，再人工确认。</h3>
-                  <p class="body-copy">保留核心解题流程：附件、题面、hint、自动流水线、候选 flag 和报告导出。界面只突出能推进解题的动作。</p>
+              <div class="workspace-brief">
+                <div>
+                  <p class="panel-kicker">Input</p>
+                  <h3 class="section-title">附件与线索</h3>
                 </div>
                 <div class="signal-strip" aria-label="运行策略">
                   <span class="signal-chip">本地优先</span>
                   <span class="signal-chip">递归提取</span>
                   <span class="signal-chip">证据留痕</span>
                 </div>
-              </div>
-
-              <div class="quick-action-grid" aria-label="常用动作">
-                <button id="quick-files-button" class="secondary-button quick-action" type="button">
-                  <strong data-copy="quickFilesTitle"></strong>
-                  <small data-copy="quickFilesNote"></small>
-                </button>
-                <button id="quick-folder-button" class="secondary-button quick-action" type="button">
-                  <strong data-copy="quickFolderTitle"></strong>
-                  <small data-copy="quickFolderNote"></small>
-                </button>
-                <button id="quick-paste-button" class="secondary-button quick-action" type="button">
-                  <strong data-copy="quickPasteTitle"></strong>
-                  <small data-copy="quickPasteNote"></small>
-                </button>
-                <button id="quick-run-button" class="secondary-button quick-action primary-quick" type="button">
-                  <strong data-copy="quickRunTitle"></strong>
-                  <small data-copy="quickRunNote"></small>
-                </button>
               </div>
 
               <div class="attachment-section">
@@ -194,8 +174,8 @@
 
               <details class="optional-clues">
                 <summary>
-                  <span>题面、hint 与人工观察</span>
-                  <small>只填能帮助分类、解码或确认 flag 的信息。</small>
+                  <span>题面与线索</span>
+                  <small>可选</small>
                 </summary>
 
                 <div class="form-grid compact-form">
