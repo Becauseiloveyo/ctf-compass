@@ -1660,6 +1660,33 @@ function collectOokDecodes(text, bucket) {
   });
 }
 
+function decodeBase64UrlToBuffer(value) {
+  const normalized = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
+  return Buffer.from(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="), "base64");
+}
+
+function collectJwtDecodes(text, bucket) {
+  const matches = dedupeStrings(
+    Array.from(
+      String(text || "").matchAll(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g),
+    )
+      .map((match) => match[0])
+      .slice(0, 12),
+  );
+
+  matches.forEach((token, index) => {
+    const parts = token.split(".");
+    try {
+      const header = decodeBase64UrlToBuffer(parts[0]).toString("utf8");
+      const payload = decodeBase64UrlToBuffer(parts[1]).toString("utf8");
+      const decoded = [`JWT ${index + 1}`, "header:", header, "payload:", payload].join("\n");
+      addDerivedTextResult(bucket, "jwt", `JWT payload ${index + 1}`, decoded, { scoreBoost: 3 });
+    } catch (_error) {
+      // ignore malformed token candidates
+    }
+  });
+}
+
 function collectTextVariantsFromBuffer(buffer, label, bucket) {
   const decoded = decodeBufferAsText(buffer).trim();
   pushDecodedResult(bucket, {
@@ -1729,6 +1756,7 @@ function smartDecodeTextContent(buffer) {
   collectBaconDecodes(text, results);
   collectBrainfuckDecodes(text, results);
   collectOokDecodes(text, results);
+  collectJwtDecodes(text, results);
 
   encoded.base64.forEach((value) => {
     try {
@@ -3861,6 +3889,97 @@ function bitsToBuffer(bits, bitOrder = "msb") {
   return Buffer.from(bytes);
 }
 
+function paethPredictor(left, up, upLeft) {
+  const estimate = left + up - upLeft;
+  const leftDistance = Math.abs(estimate - left);
+  const upDistance = Math.abs(estimate - up);
+  const upLeftDistance = Math.abs(estimate - upLeft);
+  if (leftDistance <= upDistance && leftDistance <= upLeftDistance) return left;
+  return upDistance <= upLeftDistance ? up : upLeft;
+}
+
+function unfilterPngRow(filter, row, previous, bytesPerPixel) {
+  for (let index = 0; index < row.length; index += 1) {
+    const left = index >= bytesPerPixel ? row[index - bytesPerPixel] : 0;
+    const up = previous?.[index] || 0;
+    const upLeft = index >= bytesPerPixel ? previous?.[index - bytesPerPixel] || 0 : 0;
+    if (filter === 1) {
+      row[index] = (row[index] + left) & 0xff;
+    } else if (filter === 2) {
+      row[index] = (row[index] + up) & 0xff;
+    } else if (filter === 3) {
+      row[index] = (row[index] + Math.floor((left + up) / 2)) & 0xff;
+    } else if (filter === 4) {
+      row[index] = (row[index] + paethPredictor(left, up, upLeft)) & 0xff;
+    }
+  }
+}
+
+function extractPngPaletteIndexStream(buffer) {
+  if (detectMagic(buffer) !== "png") {
+    return null;
+  }
+  const chunks = iteratePngChunks(buffer);
+  const ihdr = chunks.find((chunk) => chunk.type === "IHDR")?.data;
+  if (!ihdr || ihdr.length < 13) {
+    return null;
+  }
+
+  const width = ihdr.readUInt32BE(0);
+  const height = ihdr.readUInt32BE(4);
+  const bitDepth = ihdr[8];
+  const colorType = ihdr[9];
+  const compressionMethod = ihdr[10];
+  const filterMethod = ihdr[11];
+  const interlaceMethod = ihdr[12];
+  const pixelCount = width * height;
+  if (
+    colorType !== 3 ||
+    bitDepth !== 8 ||
+    compressionMethod !== 0 ||
+    filterMethod !== 0 ||
+    interlaceMethod !== 0 ||
+    !Number.isFinite(pixelCount) ||
+    pixelCount <= 0 ||
+    pixelCount > 8_000_000
+  ) {
+    return null;
+  }
+
+  const idatParts = chunks.filter((chunk) => chunk.type === "IDAT").map((chunk) => chunk.data);
+  if (!idatParts.length) {
+    return null;
+  }
+
+  try {
+    const rowBytes = width;
+    const inflated = zlib.inflateSync(Buffer.concat(idatParts), {
+      maxOutputLength: (rowBytes + 1) * height + 1024,
+    });
+    const rows = [];
+    let offset = 0;
+    let previous = Buffer.alloc(rowBytes);
+    for (let y = 0; y < height; y += 1) {
+      if (offset + 1 + rowBytes > inflated.length) {
+        return null;
+      }
+      const filter = inflated[offset];
+      offset += 1;
+      if (filter > 4) {
+        return null;
+      }
+      const row = Buffer.from(inflated.subarray(offset, offset + rowBytes));
+      offset += rowBytes;
+      unfilterPngRow(filter, row, previous, 1);
+      rows.push(row);
+      previous = row;
+    }
+    return Buffer.concat(rows);
+  } catch (_error) {
+    return null;
+  }
+}
+
 function buildPngStreams(parsed, traversal = "xy") {
   const streams = {
     R: [],
@@ -3908,43 +4027,71 @@ function collectPngLSBCandidates(buffer) {
     return [];
   }
 
+  const results = [];
   let parsed;
   try {
     parsed = decodeImageRaster(buffer);
   } catch (_error) {
-    return [];
+    parsed = null;
   }
-  if (!parsed) {
-    return [];
-  }
-
-  const results = [];
-  ["xy", "yx"].forEach((traversal) => {
-    const streams = buildPngStreams(parsed, traversal);
-    Object.entries(streams).forEach(([name, values]) => {
-      [0, 1, 2].forEach((bitPlane) => {
-        ["msb", "lsb"].forEach((bitOrder) => {
-          const bits = values.map((value) => (value >> bitPlane) & 1);
-          const decoded = decodeBufferAsText(bitsToBuffer(bits, bitOrder));
-          const flags = findFlagCandidates(decoded, `${magic.toUpperCase()}-${traversal}-${name}-bit${bitPlane}-${bitOrder}`);
-          const printable = extractPrintableSegments(decoded, 12, 8);
-          const score = Math.max(scoreDecodedText(decoded), flags.length ? 24 : 0);
-          if (!flags.length && (!printable.length || score < 8)) {
-            return;
-          }
-          results.push({
-            traversal,
-            channel: name,
-            bitPlane,
-            bitOrder,
-            flags,
-            printable,
-            score,
+  if (parsed) {
+    ["xy", "yx"].forEach((traversal) => {
+      const streams = buildPngStreams(parsed, traversal);
+      Object.entries(streams).forEach(([name, values]) => {
+        [0, 1, 2].forEach((bitPlane) => {
+          ["msb", "lsb"].forEach((bitOrder) => {
+            const bits = values.map((value) => (value >> bitPlane) & 1);
+            const decoded = decodeBufferAsText(bitsToBuffer(bits, bitOrder));
+            const flags = findFlagCandidates(decoded, `${magic.toUpperCase()}-${traversal}-${name}-bit${bitPlane}-${bitOrder}`);
+            const printable = extractPrintableSegments(decoded, 12, 8);
+            const score = Math.max(scoreDecodedText(decoded), flags.length ? 24 : 0);
+            if (!flags.length && (!printable.length || score < 8)) {
+              return;
+            }
+            results.push({
+              traversal,
+              channel: name,
+              bitPlane,
+              bitOrder,
+              flags,
+              printable,
+              score,
+            });
           });
         });
       });
     });
-  });
+  }
+
+  const paletteIndexStream = magic === "png" ? extractPngPaletteIndexStream(buffer) : null;
+  if (paletteIndexStream?.length) {
+    const values = Array.from(paletteIndexStream);
+    [0, 1, 2].forEach((bitPlane) => {
+      ["msb", "lsb"].forEach((bitOrder) => {
+        const bits = values.map((value) => (value >> bitPlane) & 1);
+        const decoded = decodeBufferAsText(bitsToBuffer(bits, bitOrder));
+        const flags = findFlagCandidates(decoded, `PNG-indexed-PaletteIndex-bit${bitPlane}-${bitOrder}`);
+        const printable = extractPrintableSegments(decoded, 12, 8);
+        const score = Math.max(scoreDecodedText(decoded), flags.length ? 24 : 0);
+        if (!flags.length && (!printable.length || score < 8)) {
+          return;
+        }
+        results.push({
+          traversal: "indexed",
+          channel: "PaletteIndex",
+          bitPlane,
+          bitOrder,
+          flags,
+          printable,
+          score,
+        });
+      });
+    });
+  }
+
+  if (!results.length) {
+    return [];
+  }
 
   const deduped = new Map();
   results.forEach((item) => {
@@ -4829,6 +4976,20 @@ function normalizeSessionKey(packet) {
   return [left, right].sort().join(" <-> ");
 }
 
+function extractTftpDataBlock(packet) {
+  if (packet?.protocol !== "udp" || !packet.payload || packet.payload.length < 4) {
+    return null;
+  }
+  const opcode = packet.payload.readUInt16BE(0);
+  if (opcode !== 3) {
+    return null;
+  }
+  return {
+    block: packet.payload.readUInt16BE(2),
+    data: packet.payload.subarray(4),
+  };
+}
+
 function collectTrafficCandidateResults(buffer, label) {
   if (!buffer || buffer.length < 4 || buffer.length > 2 * 1024 * 1024) return [];
   const results = [];
@@ -4890,6 +5051,7 @@ function analyzeTrafficBuffer(buffer) {
     sessions: [],
     exportedObjects: [],
     streamObjects: [],
+    protocolObjects: [],
     covertCandidates: [],
     usbHid: {
       frameCount: 0,
@@ -4909,6 +5071,7 @@ function analyzeTrafficBuffer(buffer) {
   summary.usbHid = analyzeUsbHidFrames(frames);
   const sessions = new Map();
   const icmpPayloads = new Map();
+  const tftpTransfers = new Map();
   const ipIds = [];
   const ttls = [];
   const dnsLabels = [];
@@ -4962,6 +5125,14 @@ function analyzeTrafficBuffer(buffer) {
         });
       }
       return;
+    }
+
+    const tftpData = extractTftpDataBlock(packet);
+    if (tftpData) {
+      const key = normalizeSessionKey(packet);
+      const transfer = tftpTransfers.get(key) || [];
+      transfer.push(tftpData);
+      tftpTransfers.set(key, transfer);
     }
 
     if (packet.protocol !== "tcp" || !packet.payload.length) {
@@ -5067,6 +5238,21 @@ function analyzeTrafficBuffer(buffer) {
   if (ttls.length >= 4 && new Set(ttls).size >= 3) {
     candidateResults.push(...collectTrafficCandidateResults(Buffer.from(ttls), "IPv4 TTL stream"));
   }
+  tftpTransfers.forEach((blocks, key) => {
+    const ordered = blocks
+      .slice()
+      .sort((left, right) => left.block - right.block)
+      .filter((block, index, array) => index === 0 || block.block !== array[index - 1].block);
+    const content = Buffer.concat(ordered.map((block) => block.data)).subarray(0, 2 * 1024 * 1024);
+    if (!content.length) {
+      return;
+    }
+    candidateResults.push(...collectTrafficCandidateResults(content, `TFTP data ${key}`));
+    summary.protocolObjects.push({
+      name: `tftp-${String(summary.protocolObjects.length + 1).padStart(3, "0")}${scorePrintableRatio(content) > 0.82 ? ".txt" : ".bin"}`,
+      content,
+    });
+  });
   summary.covertCandidates = dedupeStrings(candidateResults.map((item) => `${item.label}@@${item.text}`))
     .map((entry) => {
       const separator = entry.indexOf("@@");
@@ -5074,6 +5260,7 @@ function analyzeTrafficBuffer(buffer) {
     })
     .slice(0, 40);
   summary.streamObjects = streamObjects.slice(0, 24);
+  summary.protocolObjects = summary.protocolObjects.slice(0, 24);
   summary.sessions = Array.from(sessions.values())
     .sort((left, right) => right.bytes - left.bytes)
     .slice(0, 12)
@@ -10077,6 +10264,9 @@ function extractTrafficSessions(filePath, outputRoot) {
     createdFiles.push(writeGeneratedFile(outputRoot, item.name, item.content));
   });
   summary.streamObjects.forEach((item) => {
+    createdFiles.push(writeGeneratedFile(outputRoot, item.name, item.content));
+  });
+  summary.protocolObjects.forEach((item) => {
     createdFiles.push(writeGeneratedFile(outputRoot, item.name, item.content));
   });
   if (summary.covertCandidates.length) {

@@ -4,18 +4,18 @@ CTF Compass 是一个面向合法 CTF 训练和比赛的桌面附件分析工作
 
 ## 项目定位
 
-- 本项目只用于 CTF、靶场、公开练习题和你明确授权的环境。
+- 只用于 CTF、靶场、公开练习题和你明确授权的环境。
 - 默认优先本地离线分析，不会把附件上传到第三方服务。
 - 自动化目标是减少重复劳动，不保证每道题都能直接给出最终 flag。
 - 找不到 flag 时，软件会保留证据、导出中间文件，并给出下一步人工检查方向。
 
 ## 主要能力
 
-- 杂项与取证：文件魔数识别、strings、嵌入文件扫描、ZIP/GZIP/TAR/TGZ 递归解包、伪加密 ZIP 修复、PNG/BMP LSB、PNG 文本块、GIF 注释和描述符位流、JPEG 注释/XMP/APP 段、MP4 隐藏轨道和 chunk 表修复。
-- 流量分析：pcap/pcapng 基础解析、HTTP/DNS/TLS SNI、Cookie/Token、HTTP 对象导出、multipart/form-data 上传文件提取、TCP/UDP 方向流重组、ICMP/DNS/IP 隐蔽信道候选、USB HID 键盘/鼠标/手柄恢复。
-- 编码与密码：Base64/Base58/Base91/Base32、Hex、Ascii85/Z85、URL、Quoted-Printable、UUEncode、A1Z26、NATO、Morse、Polybius、Bacon、Brainfuck/Ook、零宽/空白隐写、ROT/Caesar、Affine、Rail Fence、单字节 XOR、常见 RSA 参数弱点。
-- 逆向与 Pwn：ELF/PE/APK 基础结构、导入导出、strings、checksec-lite、seccomp-BPF、core dump 摘要、危险函数、ROP gadget 候选、AArch64/ARM/MIPS/RISC-V 轻量 gadget 扫描。
-- Web 靶机：在授权前提下对本地、私网或明确授权的公网 CTF 目标做同源 GET 扫描，提取路由、脚本、注释、响应头、表单、source map、下载附件和直接 flag 候选。
+- 杂项与取证：文件魔数识别、strings、嵌入文件扫描、ZIP/GZIP/TAR/TGZ 递归解包、伪加密 ZIP 修复、PNG 文本块、PNG/BMP LSB、indexed PNG 调色板索引 LSB、GIF 注释和描述符位流、JPEG COM/XMP/APP 段、MP4 隐藏轨道和 chunk 表修复。
+- 流量分析：pcap/pcapng 基础解析、HTTP/DNS/TLS SNI、Cookie/Token、HTTP 对象导出、multipart/form-data 上传文件提取、TCP/UDP 方向流重组、TFTP DATA 分块重组、ICMP/DNS/IP 隐蔽信道候选、USB HID 键盘/鼠标/手柄恢复。
+- 编码与密码：Base64/Base58/Base91/Base32、Hex、Ascii85/Z85、Base64URL/JWT payload、URL 编码、Quoted-Printable、UUEncode、A1Z26、NATO、Morse、Polybius、Bacon、Brainfuck/Ook、零宽/空白隐写、ROT/Caesar、Affine、Rail Fence、单字节 XOR、常见 RSA 参数弱点。
+- 逆向与 Pwn：ELF/PE/APK 基础结构、导入导出、strings、checksec-lite、seccomp-BPF、core dump 摘要、危险函数、I/O/网络/堆/沙箱画像、ROP gadget 候选、AArch64/ARM/MIPS/RISC-V 轻量 gadget 扫描。
+- Web 靶机：在授权前提下对本地、私网或明确授权的 CTF 目标做同源 GET 扫描，提取路由、脚本、注释、响应头、表单、source map、下载附件和直接 flag 候选。
 
 ## 快速开始
 
@@ -39,19 +39,25 @@ npm run smoke:web
 npm run smoke:analyzer
 ```
 
+Windows 打包：
+
+```powershell
+npm run dist:zip
+```
+
+本地 zip 输出路径为 `release/CTF-Compass-0.9.2-win-x64.zip`。
+
 ## 使用流程
 
 1. 打开软件后添加题目附件，支持单文件或文件夹。
-2. 可选填写题目标题、标签、描述和你已经观察到的线索。
+2. 可选填写题目标题、标签、描述和已经观察到的线索。
 3. 点击“自动求解”，软件会递归分析附件并生成中间文件。
 4. 在“结果”和“附件”区域查看 flag 候选、提取过程、失败原因和下一步建议。
 5. 必要时导出 Markdown 报告，保留解题路径和证据。
 
-## 沙盒目录
+## 沙箱目录
 
-软件会把生成文件、提取结果和临时会话集中放在 Electron `userData/sandbox/` 下。删除或清理沙盒不会删除你原始选择的题目附件。
-
-沙盒主要目录：
+软件会把生成文件、提取结果和临时会话集中放在 Electron `userData/sandbox/` 下。删除或清理沙箱不会删除你原始选择的题目附件。
 
 - `generated/`：递归提取文件、报告、可视化图片和工具输出。
 - `downloads/`：预留给未来便携工具下载。

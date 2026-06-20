@@ -663,6 +663,65 @@ function createBmpLsb(bmpPath, text, width = 32, height = 16) {
   return bmpPath;
 }
 
+function smokeCrc32(buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function createPngChunk(type, data = Buffer.alloc(0)) {
+  const typeBuffer = Buffer.from(type, "ascii");
+  const header = Buffer.alloc(8);
+  header.writeUInt32BE(data.length, 0);
+  typeBuffer.copy(header, 4);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(smokeCrc32(Buffer.concat([typeBuffer, data])), 0);
+  return Buffer.concat([header, data, crc]);
+}
+
+function createIndexedPngPaletteLsb(pngPath, text, width = 80, height = 8) {
+  const bits = Array.from(Buffer.from(text, "utf8")).flatMap((byte) => byte.toString(2).padStart(8, "0").split("").map(Number));
+  if (bits.length > width * height) {
+    throw new Error("indexed PNG smoke fixture is too small for payload");
+  }
+
+  const indices = Buffer.alloc(width * height);
+  bits.forEach((bit, index) => {
+    indices[index] = bit;
+  });
+
+  const rawRows = [];
+  for (let y = 0; y < height; y += 1) {
+    rawRows.push(Buffer.from([0]), indices.subarray(y * width, (y + 1) * width));
+  }
+
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 3;
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+  const palette = Buffer.from([0x1f, 0x29, 0x33, 0xe8, 0xef, 0xe9]);
+  const png = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    createPngChunk("IHDR", ihdr),
+    createPngChunk("PLTE", palette),
+    createPngChunk("tEXt", Buffer.from("Software\0CTF Compass indexed smoke", "latin1")),
+    createPngChunk("IDAT", zlib.deflateSync(Buffer.concat(rawRows))),
+    createPngChunk("IEND"),
+  ]);
+  fs.mkdirSync(path.dirname(pngPath), { recursive: true });
+  fs.writeFileSync(pngPath, png);
+  return pngPath;
+}
+
 function createGifSplitComment(gifPath, chunks) {
   const header = Buffer.from("GIF89a", "ascii");
   const logicalScreen = Buffer.from([0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]);
@@ -873,6 +932,52 @@ function createEthernetIpv4TcpFrame(payload, options = {}) {
   return Buffer.concat([ethernet, ip, tcp, payload]);
 }
 
+function createEthernetIpv4UdpFrame(payload, options = {}) {
+  const srcIp = options.srcIp || [10, 0, 0, 2];
+  const dstIp = options.dstIp || [10, 0, 0, 3];
+  const srcPort = options.srcPort || 49152;
+  const dstPort = options.dstPort || 69;
+  const ethernet = Buffer.from([
+    0x02, 0x00, 0x00, 0x00, 0x00, 0x03,
+    0x02, 0x00, 0x00, 0x00, 0x00, 0x02,
+    0x08, 0x00,
+  ]);
+  const ip = Buffer.alloc(20);
+  ip[0] = 0x45;
+  ip.writeUInt16BE(ip.length + 8 + payload.length, 2);
+  ip.writeUInt16BE(0x4567, 4);
+  ip[8] = 64;
+  ip[9] = 17;
+  Buffer.from(srcIp).copy(ip, 12);
+  Buffer.from(dstIp).copy(ip, 16);
+  ip.writeUInt16BE(checksum16(ip), 10);
+  const udp = Buffer.alloc(8);
+  udp.writeUInt16BE(srcPort, 0);
+  udp.writeUInt16BE(dstPort, 2);
+  udp.writeUInt16BE(udp.length + payload.length, 4);
+  udp.writeUInt16BE(0, 6);
+  return Buffer.concat([ethernet, ip, udp, payload]);
+}
+
+function writeEthernetPcap(filePath, frames) {
+  const globalHeader = Buffer.alloc(24);
+  globalHeader.writeUInt32LE(0xa1b2c3d4, 0);
+  globalHeader.writeUInt16LE(2, 4);
+  globalHeader.writeUInt16LE(4, 6);
+  globalHeader.writeUInt32LE(65535, 16);
+  globalHeader.writeUInt32LE(1, 20);
+  const records = frames.map((frame, index) => {
+    const header = Buffer.alloc(16);
+    header.writeUInt32LE(index, 0);
+    header.writeUInt32LE(frame.length, 8);
+    header.writeUInt32LE(frame.length, 12);
+    return Buffer.concat([header, frame]);
+  });
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, Buffer.concat([globalHeader, ...records]));
+  return filePath;
+}
+
 function createHttpMultipartUploadPcap(filePath, flag) {
   const boundary = "----ctfcompass-smoke-boundary";
   const body = Buffer.from(
@@ -906,19 +1011,33 @@ function createHttpMultipartUploadPcap(filePath, flag) {
     body,
   ]);
   const frame = createEthernetIpv4TcpFrame(request);
-  const globalHeader = Buffer.alloc(24);
-  globalHeader.writeUInt32LE(0xa1b2c3d4, 0);
-  globalHeader.writeUInt16LE(2, 4);
-  globalHeader.writeUInt16LE(4, 6);
-  globalHeader.writeUInt32LE(65535, 16);
-  globalHeader.writeUInt32LE(1, 20);
-  const packetHeader = Buffer.alloc(16);
-  packetHeader.writeUInt32LE(Math.floor(Date.now() / 1000), 0);
-  packetHeader.writeUInt32LE(frame.length, 8);
-  packetHeader.writeUInt32LE(frame.length, 12);
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, Buffer.concat([globalHeader, packetHeader, frame]));
-  return filePath;
+  return writeEthernetPcap(filePath, [frame]);
+}
+
+function createTftpDataPcap(filePath, flag) {
+  const payload = Buffer.from(`${flag}\n`, "utf8");
+  const chunks = [payload.subarray(0, 14), payload.subarray(14)];
+  const frames = chunks.map((chunk, index) => {
+    const data = Buffer.alloc(4 + chunk.length);
+    data.writeUInt16BE(3, 0);
+    data.writeUInt16BE(index + 1, 2);
+    chunk.copy(data, 4);
+    return createEthernetIpv4UdpFrame(data, { srcPort: 1069, dstPort: 49153 });
+  });
+  return writeEthernetPcap(filePath, frames);
+}
+
+function base64UrlEncodeJson(value) {
+  return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+}
+
+function createJwtFixture(filePath, flag) {
+  const token = [
+    base64UrlEncodeJson({ alg: "HS256", typ: "JWT" }),
+    base64UrlEncodeJson({ user: "ctf-player", role: "user", note: flag }),
+    "signature123",
+  ].join(".");
+  return writeText(filePath, `Authorization: Bearer ${token}\n`);
 }
 
 function reverseByteBits(value) {
@@ -1621,6 +1740,22 @@ async function main() {
     }),
   );
 
+  const jwtFlag = "flag{jwt_payload_smoke}";
+  const jwtPath = createJwtFixture(path.join(root, "input", "jwt.txt"), jwtFlag);
+  results.push(
+    await runCase(
+      root,
+      "jwt-payload",
+      {
+        title: "JWT payload smoke",
+        description: "Decode local JWT header and payload fields without external web tooling.",
+        tags: ["web", "jwt", "token"],
+        artifacts: [jwtPath],
+      },
+      jwtFlag,
+    ),
+  );
+
   const dtmfMessage = "onlyninetieskidswillrememberthis";
   const dtmfFlag = `FLAG{${dtmfMessage}}`;
   const dtmfPath = writeText(path.join(root, "input", "dtmf-combined.txt"), `${encodeDtmfMultitap(dtmfMessage)}\n`);
@@ -1887,6 +2022,24 @@ async function main() {
     ),
   );
 
+  const tftpFlag = "flag{tftp_data_smoke}";
+  const tftpPath = createTftpDataPcap(path.join(root, "input", "tftp-data.pcap"), tftpFlag);
+  results.push(
+    await runReportFlagCase(
+      root,
+      "tftp-data-transfer",
+      {
+        title: "TFTP data transfer smoke",
+        description: "Reassemble TFTP DATA blocks from UDP traffic.",
+        tags: ["forensic", "pcap", "tftp"],
+        artifacts: [tftpPath],
+      },
+      tftpFlag,
+      "-traffic-summary.txt",
+      /TFTP data[\s\S]*flag\{tftp_data_smoke\}/,
+    ),
+  );
+
   const logicCsvFlag = "flag{logic_csv_gate_smoke}";
   const logicCsvPath = createLogicCsv(path.join(root, "input", "logic.csv"), logicCsvFlag);
   results.push(
@@ -1977,6 +2130,21 @@ async function main() {
         artifacts: [bmpPath],
       },
       bmpFlag,
+    ),
+  );
+
+  const indexedPngFlag = "flag{png_palette_lsb_smoke}";
+  const indexedPngPath = createIndexedPngPaletteLsb(path.join(root, "input", "palette-lsb.png"), indexedPngFlag);
+  results.push(
+    await runCase(
+      root,
+      "png-palette-index-lsb",
+      {
+        title: "png palette index lsb smoke",
+        description: "Indexed PNG palette indices can carry LSB steganography even when expanded RGBA looks normal.",
+        artifacts: [indexedPngPath],
+      },
+      indexedPngFlag,
     ),
   );
 
