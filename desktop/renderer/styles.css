@@ -1309,7 +1309,8 @@ select:focus {
   margin-top: 16px;
 }
 
-body[data-view="web"] .header-actions {
+body[data-view="web"] .header-actions,
+body[data-view="settings"] .header-actions {
   display: none;
 }
 
@@ -1672,7 +1673,9 @@ body[data-view="web"] .header-actions {
 }
 
 .settings-layout {
-  grid-template-columns: minmax(0, 980px);
+  max-width: 1120px;
+  margin: 0 auto;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .settings-row {

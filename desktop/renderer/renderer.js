@@ -85,8 +85,8 @@ const STRINGS = {
   toolMissingTitle: "可选增强工具",
   toolEmptyInstalled: "\u672a\u68c0\u6d4b\u5230\u53ef\u76f4\u63a5\u8fd0\u884c\u7684\u5916\u90e8\u5de5\u5177\u3002",
   toolMissingNote: "不安装也会使用内置工具箱；安装后只会增加更深的专项扫描。",
-  settingsKicker: "\u8fd0\u884c\u7b56\u7565",
-  settingsTitle: "\u9879\u76ee\u57fa\u7ebf",
+  settingsKicker: "基础设置",
+  settingsTitle: "偏好与本地环境",
   settingsThemeTitle: "\u754c\u9762\u98ce\u683c",
   settingsThemeNote: "\u9ed8\u8ba4\u767d\u8272\u6781\u7b80\u5e03\u5c40\uff0c\u652f\u6301\u6697\u9ed1\u6a21\u5f0f",
   settingsThemeButton: "\u5207\u6362\u4e3b\u9898",
@@ -160,8 +160,8 @@ const VIEW_COPY = {
     title: "flag \u5019\u9009\u3001\u9898\u578b\u5206\u6d41\u4e0e\u89e3\u9898\u8def\u5f84",
   },
   settings: {
-    kicker: "\u8bbe\u7f6e",
-    title: "\u9879\u76ee\u57fa\u7ebf\u4e0e\u6253\u5305\u7b56\u7565",
+    kicker: "系统",
+    title: "设置",
   },
 };
 

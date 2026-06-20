@@ -150,7 +150,10 @@ input, textarea, select { border-radius: 16px; background: color-mix(in srgb, va
 input:focus, textarea:focus, select:focus { background: var(--surface); }
 .field span, .sandbox-info-card span, .metric-pill span, .solver-flag > span { font-weight: 720; }
 .artifact-row:hover, .detail-card:hover, .stack-item:hover, .web-page-item:hover { border-color: var(--line-strong); transform: translateY(-1px); }
-body[data-view="web"] .header-actions { display: none; }
+body[data-view="web"] .header-actions, body[data-view="settings"] .header-actions { display: none; }
+
+body[data-view="settings"] .main { width: min(1240px, 100%); }
+body[data-view="settings"] .header { min-height: 70px; }
 
 @media (max-width: 1180px) {
   .workspace-layout, .web-layout, .web-result-grid, .results-overview, .two-column, .workbench-body { grid-template-columns: 1fr; }
