@@ -45,21 +45,8 @@
   transition: opacity 170ms ease, transform 170ms ease !important;
 }
 
-body.sidebar-collapsed.sidebar-hover-expanded {
-  --sidebar-width: 88px !important;
-}
-
-body.sidebar-collapsed.sidebar-hover-expanded .shell {
-  grid-template-columns: 88px minmax(0, 1fr) !important;
-}
-
-body.sidebar-collapsed.sidebar-hover-expanded .sidebar {
-  width: 88px !important;
-}
-
 .sidebar-top,
-body.sidebar-collapsed .sidebar-top,
-body.sidebar-collapsed.sidebar-hover-expanded .sidebar-top {
+body.sidebar-collapsed .sidebar-top {
   height: auto !important;
   min-height: 0 !important;
   display: grid !important;
@@ -70,8 +57,7 @@ body.sidebar-collapsed.sidebar-hover-expanded .sidebar-top {
 
 .sidebar-toggle,
 body:not(.sidebar-collapsed) .sidebar-toggle,
-body.sidebar-collapsed .sidebar-toggle,
-body.sidebar-collapsed.sidebar-hover-expanded .sidebar-toggle {
+body.sidebar-collapsed .sidebar-toggle {
   width: var(--sidebar-toggle-size) !important;
   height: var(--sidebar-toggle-size) !important;
   min-width: var(--sidebar-toggle-size) !important;
@@ -93,8 +79,7 @@ body.sidebar-collapsed.sidebar-hover-expanded .sidebar-toggle {
 
 .brand,
 body:not(.sidebar-collapsed) .brand,
-body.sidebar-collapsed .brand,
-body.sidebar-collapsed.sidebar-hover-expanded .brand {
+body.sidebar-collapsed .brand {
   position: relative !important;
   min-height: 48px !important;
   display: block !important;
@@ -105,8 +90,7 @@ body.sidebar-collapsed.sidebar-hover-expanded .brand {
 }
 
 .brand-mark,
-body.sidebar-collapsed .brand-mark,
-body.sidebar-collapsed.sidebar-hover-expanded .brand-mark {
+body.sidebar-collapsed .brand-mark {
   position: absolute !important;
   left: var(--sidebar-rail-x) !important;
   top: 50% !important;
@@ -119,8 +103,7 @@ body.sidebar-collapsed.sidebar-hover-expanded .brand-mark {
 }
 
 .brand-copy,
-body:not(.sidebar-collapsed) .brand-copy,
-body.sidebar-hover-expanded .brand-copy {
+body:not(.sidebar-collapsed) .brand-copy {
   display: block !important;
   margin-left: 72px !important;
   padding-top: 2px !important;
@@ -130,16 +113,14 @@ body.sidebar-hover-expanded .brand-copy {
   pointer-events: auto !important;
 }
 
-body.sidebar-collapsed .brand-copy,
-body.sidebar-collapsed.sidebar-hover-expanded .brand-copy {
+body.sidebar-collapsed .brand-copy {
   opacity: 0 !important;
   pointer-events: none !important;
   transform: translateX(-8px) !important;
 }
 
 .nav,
-body.sidebar-collapsed .nav,
-body.sidebar-collapsed.sidebar-hover-expanded .nav {
+body.sidebar-collapsed .nav {
   min-height: 0 !important;
   height: auto !important;
   display: grid !important;
@@ -149,15 +130,13 @@ body.sidebar-collapsed.sidebar-hover-expanded .nav {
 }
 
 .nav-group,
-body.sidebar-collapsed .nav-group,
-body.sidebar-collapsed.sidebar-hover-expanded .nav-group {
+body.sidebar-collapsed .nav-group {
   display: grid !important;
   gap: 6px !important;
 }
 
 .nav-item,
-body:not(.sidebar-collapsed) .nav-item,
-body.sidebar-hover-expanded .nav-item {
+body:not(.sidebar-collapsed) .nav-item {
   position: relative !important;
   width: 100% !important;
   min-height: 44px !important;
@@ -171,8 +150,7 @@ body.sidebar-hover-expanded .nav-item {
 }
 
 .nav-icon,
-body:not(.sidebar-collapsed) .nav-icon,
-body.sidebar-hover-expanded .nav-icon {
+body:not(.sidebar-collapsed) .nav-icon {
   position: absolute !important;
   left: var(--sidebar-rail-x) !important;
   top: 50% !important;
@@ -192,8 +170,7 @@ body.sidebar-hover-expanded .nav-icon {
 }
 
 .nav-item > span:not(.nav-icon):not(.nav-count),
-body:not(.sidebar-collapsed) .nav-item > span:not(.nav-icon):not(.nav-count),
-body.sidebar-hover-expanded .nav-item > span:not(.nav-icon):not(.nav-count) {
+body:not(.sidebar-collapsed) .nav-item > span:not(.nav-icon):not(.nav-count) {
   display: block !important;
   margin-left: 72px !important;
   padding-right: 12px !important;
@@ -205,8 +182,7 @@ body.sidebar-hover-expanded .nav-item > span:not(.nav-icon):not(.nav-count) {
   transform: translateX(0) !important;
 }
 
-body.sidebar-collapsed .nav-item,
-body.sidebar-collapsed.sidebar-hover-expanded .nav-item {
+body.sidebar-collapsed .nav-item {
   position: relative !important;
   width: var(--sidebar-collapsed-item) !important;
   height: var(--sidebar-collapsed-item) !important;
@@ -221,8 +197,7 @@ body.sidebar-collapsed.sidebar-hover-expanded .nav-item {
   box-shadow: none !important;
 }
 
-body.sidebar-collapsed .nav-icon,
-body.sidebar-collapsed.sidebar-hover-expanded .nav-icon {
+body.sidebar-collapsed .nav-icon {
   position: static !important;
   left: auto !important;
   top: auto !important;
@@ -234,16 +209,14 @@ body.sidebar-collapsed.sidebar-hover-expanded .nav-icon {
   place-items: center !important;
 }
 
-body.sidebar-collapsed .nav-item > span:not(.nav-icon):not(.nav-count),
-body.sidebar-collapsed.sidebar-hover-expanded .nav-item > span:not(.nav-icon):not(.nav-count) {
+body.sidebar-collapsed .nav-item > span:not(.nav-icon):not(.nav-count) {
   display: none !important;
   opacity: 0 !important;
   pointer-events: none !important;
   transform: translateX(-8px) !important;
 }
 
-body.sidebar-collapsed .nav-item.active,
-body.sidebar-collapsed.sidebar-hover-expanded .nav-item.active {
+body.sidebar-collapsed .nav-item.active {
   background: var(--accent-soft) !important;
   border-color: color-mix(in srgb, var(--accent) 28%, transparent) !important;
   color: var(--accent) !important;
@@ -251,8 +224,7 @@ body.sidebar-collapsed.sidebar-hover-expanded .nav-item.active {
 }
 
 .sidebar-footer,
-body.sidebar-collapsed .sidebar-footer,
-body.sidebar-collapsed.sidebar-hover-expanded .sidebar-footer {
+body.sidebar-collapsed .sidebar-footer {
   display: flex !important;
   flex: 0 0 auto !important;
   margin-top: auto !important;
@@ -269,8 +241,7 @@ body.sidebar-collapsed.sidebar-hover-expanded .sidebar-footer {
 }
 
 .sidebar-footer .sidebar-row:first-child,
-body.sidebar-collapsed .sidebar-footer .sidebar-row:first-child,
-body.sidebar-collapsed.sidebar-hover-expanded .sidebar-footer .sidebar-row:first-child {
+body.sidebar-collapsed .sidebar-footer .sidebar-row:first-child {
   width: auto !important;
   min-height: 0 !important;
   padding: 0 !important;
@@ -280,15 +251,13 @@ body.sidebar-collapsed.sidebar-hover-expanded .sidebar-footer .sidebar-row:first
 }
 
 body:not(.sidebar-collapsed) .sidebar-footer,
-body.sidebar-collapsed .sidebar-footer,
-body.sidebar-collapsed.sidebar-hover-expanded .sidebar-footer {
+body.sidebar-collapsed .sidebar-footer {
   justify-content: flex-start !important;
   padding: 12px 0 20px calc(var(--sidebar-rail-x) - var(--sidebar-theme-size) / 2) !important;
 }
 
 .theme-toggle,
-body.sidebar-collapsed .theme-toggle,
-body.sidebar-collapsed.sidebar-hover-expanded .theme-toggle {
+body.sidebar-collapsed .theme-toggle {
   width: var(--sidebar-theme-size) !important;
   height: var(--sidebar-theme-size) !important;
   min-width: var(--sidebar-theme-size) !important;

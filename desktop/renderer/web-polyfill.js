@@ -187,7 +187,70 @@
     const view = document.createElement("section");
     view.id = "ctf2-view";
     view.className = "view ctf2-view";
-    view.innerHTML = `<div class="ctf2-toolbar panel"><div><p class="panel-kicker">CTF2 CONNECTOR</p><h3 class="panel-title">直接浏览并导入 CTF2 题目</h3><p class="body-copy">题库可公开浏览；附件下载需要登录令牌。</p></div><div class="ctf2-account-actions"><span id="ctf2-account-status" class="scope-badge">检查登录状态...</span><button id="ctf2-login-button" class="secondary-button" type="button">应用内登录</button><button id="ctf2-system-login-button" class="secondary-button" type="button">浏览器登录</button><button id="ctf2-logout-button" class="secondary-button danger-button" type="button">退出</button></div></div><details class="panel ctf2-token-help"><summary>浏览器 token</summary><div class="ctf2-token-help-body"><p class="body-copy">Passkey 无法在应用内验证时，使用系统浏览器登录后复制 localStorage token。</p><div class="ctf2-token-row"><label class="field ctf2-token-field" for="ctf2-token-input"><span>粘贴 token</span><input id="ctf2-token-input" type="password" placeholder="在这里粘贴 CTF2 token" autocomplete="off" /></label><button id="ctf2-token-import-button" class="primary-button" type="button">验证并连接</button></div></div></details><div class="ctf2-layout"><section class="panel ctf2-browser-panel"><div class="ctf2-filters"><label class="field ctf2-search-field"><span>搜索题目</span><input id="ctf2-search-input" type="search" placeholder="题目名、描述或编号" autocomplete="off" /></label><label class="field"><span>题型</span><select id="ctf2-category-select"><option value="all">全部</option></select></label><button id="ctf2-refresh-button" class="secondary-button" type="button">刷新</button></div><div class="section-label-row"><div><h3 class="section-title">BUUCTF 公开练习题</h3><p id="ctf2-result-count" class="body-copy">尚未加载。</p></div></div><div id="ctf2-challenge-list" class="ctf2-challenge-list"></div></section><aside class="panel ctf2-detail-panel"><div class="panel-head compact-head"><div><p class="panel-kicker">SELECTED CHALLENGE</p><h3 id="ctf2-detail-title" class="panel-title">选择一道题目</h3></div></div><div id="ctf2-detail-meta" class="ctf2-detail-meta"></div><p id="ctf2-detail-description" class="body-copy">选择题目后可查看描述、附件和导入操作。</p><div id="ctf2-file-list" class="stack-list compact-stack"></div><button id="ctf2-import-button" class="primary-button ctf2-import-button" type="button" disabled>导入并求解</button><p id="ctf2-import-status" class="empty-copy">不会自动启动靶机，也不会自动提交 flag。</p></aside></div>`;
+    // 重排注入的 CTF2 工作区，同时保留 renderer 依赖的元素 ID。
+    view.innerHTML = `
+      <div class="ctf2-toolbar panel">
+        <div class="ctf2-toolbar-copy">
+          <p class="panel-kicker">题库连接</p>
+          <h3 class="panel-title">CTF2 题库</h3>
+          <p class="body-copy">浏览公开练习题，登录后可下载附件并导入工作台分析。</p>
+        </div>
+        <div class="ctf2-account-actions">
+          <span id="ctf2-account-status" class="scope-badge">检查登录状态...</span>
+          <button id="ctf2-login-button" class="secondary-button" type="button">应用内登录</button>
+          <button id="ctf2-system-login-button" class="secondary-button" type="button">浏览器登录</button>
+          <button id="ctf2-logout-button" class="secondary-button danger-button" type="button">退出</button>
+        </div>
+      </div>
+      <details class="panel ctf2-token-help">
+        <summary>无法 Passkey 时使用 token 连接</summary>
+        <div class="ctf2-token-help-body">
+          <p class="body-copy">如果应用内无法完成二步验证，先用系统浏览器登录 CTF2，再复制 localStorage token 到这里。</p>
+          <div class="ctf2-token-row">
+            <label class="field ctf2-token-field" for="ctf2-token-input">
+              <span>粘贴 token</span>
+              <input id="ctf2-token-input" type="password" placeholder="粘贴 CTF2 token" autocomplete="off" />
+            </label>
+            <button id="ctf2-token-import-button" class="primary-button" type="button">验证并连接</button>
+          </div>
+        </div>
+      </details>
+      <div class="ctf2-layout">
+        <section class="panel ctf2-browser-panel">
+          <div class="ctf2-panel-head">
+            <div>
+              <p class="panel-kicker">题目列表</p>
+              <h3 class="panel-title">公开练习题</h3>
+            </div>
+            <p id="ctf2-result-count" class="body-copy">尚未加载。</p>
+          </div>
+          <div class="ctf2-filters">
+            <label class="field ctf2-search-field" for="ctf2-search-input">
+              <span>搜索</span>
+              <input id="ctf2-search-input" type="search" placeholder="题目名、描述或编号" autocomplete="off" />
+            </label>
+            <label class="field" for="ctf2-category-select">
+              <span>题型</span>
+              <select id="ctf2-category-select"><option value="all">全部</option></select>
+            </label>
+            <button id="ctf2-refresh-button" class="secondary-button" type="button">刷新</button>
+          </div>
+          <div id="ctf2-challenge-list" class="ctf2-challenge-list"></div>
+        </section>
+        <aside class="panel ctf2-detail-panel">
+          <div class="panel-head compact-head">
+            <div>
+              <p class="panel-kicker">当前题目</p>
+              <h3 id="ctf2-detail-title" class="panel-title">选择一道题目</h3>
+            </div>
+          </div>
+          <div id="ctf2-detail-meta" class="ctf2-detail-meta"></div>
+          <p id="ctf2-detail-description" class="body-copy">选择题目后可查看描述、附件和导入操作。</p>
+          <div id="ctf2-file-list" class="stack-list compact-stack"></div>
+          <button id="ctf2-import-button" class="primary-button ctf2-import-button" type="button" disabled>导入并求解</button>
+          <p id="ctf2-import-status" class="empty-copy">只导入附件到本地工作台，不会自动提交 flag。</p>
+        </aside>
+      </div>`;
     main.append(view);
     const el = { account: view.querySelector("#ctf2-account-status"), login: view.querySelector("#ctf2-login-button"), systemLogin: view.querySelector("#ctf2-system-login-button"), logout: view.querySelector("#ctf2-logout-button"), token: view.querySelector("#ctf2-token-input"), importToken: view.querySelector("#ctf2-token-import-button"), search: view.querySelector("#ctf2-search-input"), category: view.querySelector("#ctf2-category-select"), refresh: view.querySelector("#ctf2-refresh-button"), count: view.querySelector("#ctf2-result-count"), list: view.querySelector("#ctf2-challenge-list"), detailTitle: view.querySelector("#ctf2-detail-title"), detailMeta: view.querySelector("#ctf2-detail-meta"), detailDescription: view.querySelector("#ctf2-detail-description"), fileList: view.querySelector("#ctf2-file-list"), importChallenge: view.querySelector("#ctf2-import-button"), importStatus: view.querySelector("#ctf2-import-status") };
     navButton.addEventListener("click", activateCtf2View);
@@ -216,7 +279,7 @@
       document.querySelectorAll(".view").forEach((node) => node.classList.toggle("is-active", node === view));
       document.body.dataset.view = "ctf2";
       document.getElementById("view-kicker").textContent = "CTF2";
-      document.getElementById("view-title").textContent = "题库连接器";
+      document.getElementById("view-title").textContent = "CTF2 题库";
       installSelectSkins();
       if (!state.challenges.length) {
         refreshStatus().catch(() => {});
@@ -252,7 +315,8 @@
         const item = document.createElement("button");
         item.type = "button";
         item.className = `ctf2-challenge-item${state.selected?.id === challenge.id ? " is-selected" : ""}`;
-        item.innerHTML = `<div class="ctf2-challenge-copy"><strong>${escapeHtml(challenge.name)}</strong><small>${escapeHtml([challenge.category, challenge.difficulty].filter(Boolean).join(" · ") || "CTF2")}</small></div><span class="ctf2-challenge-stats">${challenge.files?.length ? `${challenge.files.length} 附件` : "无附件"}<br />${challenge.solveCount || 0} solves</span>`;
+        const solvedText = challenge.solveCount ? `${challenge.solveCount} 次解出` : "暂无解出";
+        item.innerHTML = `<div class="ctf2-challenge-copy"><strong>${escapeHtml(challenge.name)}</strong><small>${escapeHtml([challenge.category, challenge.difficulty].filter(Boolean).join(" · ") || "CTF2")}</small></div><span class="ctf2-challenge-stats">${challenge.files?.length ? `${challenge.files.length} 附件` : "无附件"}<br />${solvedText}</span>`;
         item.addEventListener("click", () => {
           state.selected = challenge;
           renderList(total);
@@ -267,7 +331,7 @@
       el.detailTitle.textContent = selected?.name || "选择一道题目";
       el.detailDescription.textContent = selected?.description || "选择题目后可查看描述、附件和导入操作。";
       el.detailMeta.innerHTML = "";
-      if (selected) [selected.category, selected.difficulty, selected.points ? `${selected.points} 分` : "", selected.solveCount ? `${selected.solveCount} solves` : ""].filter(Boolean).forEach((label) => { const tag = document.createElement("span"); tag.textContent = label; el.detailMeta.append(tag); });
+      if (selected) [selected.category, selected.difficulty, selected.points ? `${selected.points} 分` : "", selected.solveCount ? `${selected.solveCount} 次解出` : ""].filter(Boolean).forEach((label) => { const tag = document.createElement("span"); tag.textContent = label; el.detailMeta.append(tag); });
       el.fileList.innerHTML = "";
       const files = selected?.files || [];
       if (!files.length) el.fileList.innerHTML = `<p class="empty-copy">${selected ? "该题没有附件；靶机题需要在 CTF2 页面手动启动环境。" : "尚未选择题目。"}</p>`;

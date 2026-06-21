@@ -107,6 +107,7 @@ body[data-theme="dark"] .select-skin-menu {
 }
 
 #ctf2-view .ctf2-filters {
+  display: grid !important;
   grid-template-columns: minmax(240px, 1fr) 178px 82px !important;
   gap: 10px !important;
   align-items: end !important;
@@ -131,6 +132,179 @@ body[data-theme="dark"] .select-skin-menu {
   padding-inline: 0 !important;
   display: grid !important;
   place-items: center !important;
+}
+
+#ctf2-view {
+  gap: 14px !important;
+}
+
+#ctf2-view .ctf2-toolbar {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 16px !important;
+  padding: 18px 20px !important;
+}
+
+#ctf2-view .ctf2-toolbar-copy {
+  min-width: 0 !important;
+}
+
+#ctf2-view .ctf2-toolbar .panel-title {
+  margin-top: 4px !important;
+}
+
+#ctf2-view .ctf2-account-actions {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  justify-content: flex-end !important;
+  gap: 8px !important;
+  min-width: min(520px, 46%) !important;
+}
+
+#ctf2-view .ctf2-account-actions .scope-badge {
+  max-width: 100% !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+#ctf2-view .ctf2-token-help {
+  padding: 14px 18px !important;
+}
+
+#ctf2-view .ctf2-token-help summary {
+  cursor: pointer !important;
+  color: var(--muted-strong) !important;
+  font-weight: 750 !important;
+}
+
+#ctf2-view .ctf2-token-help[open] summary {
+  margin-bottom: 12px !important;
+}
+
+#ctf2-view .ctf2-token-row {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  gap: 10px !important;
+  align-items: end !important;
+}
+
+#ctf2-view .ctf2-layout {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1.08fr) minmax(320px, 0.82fr) !important;
+  gap: clamp(12px, 1.4vw, 18px) !important;
+  align-items: start !important;
+}
+
+#ctf2-view .ctf2-browser-panel,
+#ctf2-view .ctf2-detail-panel {
+  min-width: 0 !important;
+  padding: 20px !important;
+}
+
+#ctf2-view .ctf2-detail-panel {
+  position: sticky !important;
+  top: 104px !important;
+}
+
+#ctf2-view .ctf2-panel-head {
+  display: flex !important;
+  align-items: flex-start !important;
+  justify-content: space-between !important;
+  gap: 16px !important;
+  padding-bottom: 14px !important;
+  margin-bottom: 14px !important;
+  border-bottom: 1px solid var(--line) !important;
+}
+
+#ctf2-view .ctf2-panel-head .body-copy {
+  margin: 2px 0 0 !important;
+  white-space: nowrap !important;
+}
+
+#ctf2-view .ctf2-filters {
+  margin-bottom: 14px !important;
+}
+
+#ctf2-view .ctf2-challenge-list {
+  display: grid !important;
+  gap: 10px !important;
+  max-height: min(620px, calc(100vh - 330px)) !important;
+  overflow: auto !important;
+  padding-right: 2px !important;
+}
+
+#ctf2-view .ctf2-challenge-item {
+  width: 100% !important;
+  min-width: 0 !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  gap: 12px !important;
+  align-items: center !important;
+  padding: 14px !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 15px !important;
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  text-align: left !important;
+  cursor: pointer !important;
+  box-shadow: none !important;
+}
+
+#ctf2-view .ctf2-challenge-item:hover,
+#ctf2-view .ctf2-challenge-item.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--line)) !important;
+  background: var(--accent-soft) !important;
+}
+
+#ctf2-view .ctf2-challenge-copy {
+  min-width: 0 !important;
+}
+
+#ctf2-view .ctf2-challenge-copy strong,
+#ctf2-view .ctf2-challenge-copy small {
+  display: block !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+#ctf2-view .ctf2-challenge-copy small,
+#ctf2-view .ctf2-challenge-stats {
+  color: var(--muted) !important;
+  font-size: 0.88rem !important;
+  line-height: 1.45 !important;
+}
+
+#ctf2-view .ctf2-challenge-stats {
+  text-align: right !important;
+  white-space: nowrap !important;
+}
+
+#ctf2-view .ctf2-detail-meta {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 8px !important;
+  margin: 12px 0 !important;
+}
+
+#ctf2-view .ctf2-detail-meta span {
+  display: inline-flex !important;
+  align-items: center !important;
+  min-height: 28px !important;
+  padding: 0 10px !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 999px !important;
+  color: var(--muted-strong) !important;
+  background: var(--surface-subtle) !important;
+  font-size: 0.86rem !important;
+  font-weight: 700 !important;
+}
+
+#ctf2-view .ctf2-import-button {
+  width: 100% !important;
+  margin-top: 14px !important;
 }
 
 #web-view .web-layout {
@@ -280,6 +454,25 @@ body[data-theme="dark"] .select-skin-menu {
 }
 
 @media (max-width: 1180px) {
+  #ctf2-view .ctf2-toolbar,
+  #ctf2-view .ctf2-panel-head {
+    align-items: stretch !important;
+    flex-direction: column !important;
+  }
+
+  #ctf2-view .ctf2-account-actions {
+    justify-content: flex-start !important;
+    min-width: 0 !important;
+  }
+
+  #ctf2-view .ctf2-layout {
+    grid-template-columns: 1fr !important;
+  }
+
+  #ctf2-view .ctf2-detail-panel {
+    position: static !important;
+  }
+
   #ctf2-view .ctf2-filters {
     grid-template-columns: minmax(200px, 1fr) 158px 76px !important;
     gap: 8px !important;
@@ -288,6 +481,26 @@ body[data-theme="dark"] .select-skin-menu {
   #ctf2-view .ctf2-filters .secondary-button {
     width: 76px !important;
     min-width: 76px !important;
+  }
+}
+
+@media (max-width: 760px) {
+  #ctf2-view .ctf2-token-row,
+  #ctf2-view .ctf2-filters {
+    grid-template-columns: 1fr !important;
+  }
+
+  #ctf2-view .ctf2-filters .secondary-button {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  #ctf2-view .ctf2-challenge-item {
+    grid-template-columns: 1fr !important;
+  }
+
+  #ctf2-view .ctf2-challenge-stats {
+    text-align: left !important;
   }
 }
 

@@ -978,6 +978,34 @@ function writeEthernetPcap(filePath, frames) {
   return filePath;
 }
 
+function encodeDnsName(name) {
+  return Buffer.concat(
+    String(name)
+      .split(".")
+      .filter(Boolean)
+      .map((label) => Buffer.concat([Buffer.from([Buffer.byteLength(label)]), Buffer.from(label, "utf8")]))
+      .concat(Buffer.from([0])),
+  );
+}
+
+function createDnsTxtPcap(filePath, flag) {
+  const qname = encodeDnsName("flag.ctf.local");
+  const question = Buffer.concat([qname, Buffer.from([0x00, 0x10, 0x00, 0x01])]);
+  const txt = Buffer.from(flag, "utf8");
+  const answerData = Buffer.concat([Buffer.from([txt.length]), txt]);
+  const answer = Buffer.concat([
+    Buffer.from([0xc0, 0x0c, 0x00, 0x10, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3c]),
+    Buffer.from([(answerData.length >> 8) & 0xff, answerData.length & 0xff]),
+    answerData,
+  ]);
+  const dns = Buffer.concat([
+    Buffer.from([0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]),
+    question,
+    answer,
+  ]);
+  return writeEthernetPcap(filePath, [createEthernetIpv4UdpFrame(dns, { srcPort: 53, dstPort: 49162 })]);
+}
+
 function createHttpMultipartUploadPcap(filePath, flag) {
   const boundary = "----ctfcompass-smoke-boundary";
   const body = Buffer.from(
@@ -2060,6 +2088,24 @@ async function main() {
       icmpFlag,
       "-traffic-summary.txt",
       /ICMP payload[\s\S]*flag\{icmp_covert_smoke\}/,
+    ),
+  );
+
+  const dnsTxtFlag = "flag{dns_txt_answer_smoke}";
+  const dnsTxtPath = createDnsTxtPcap(path.join(root, "input", "dns-txt.pcap"), dnsTxtFlag);
+  results.push(
+    await runReportFlagCase(
+      root,
+      "dns-txt-answer",
+      {
+        title: "DNS TXT answer smoke",
+        description: "Recover a flag hidden in a DNS TXT response.",
+        tags: ["misc", "pcap", "dns", "txt"],
+        artifacts: [dnsTxtPath],
+      },
+      dnsTxtFlag,
+      "-traffic-summary.txt",
+      /# DNS[\s\S]*A flag\.ctf\.local \[16\] flag\{dns_txt_answer_smoke\}/,
     ),
   );
 
