@@ -124,6 +124,27 @@ const DTMF_COMBINED_MAP = {
   2574: "D",
 };
 
+const DTMF_LOW_FREQUENCIES = [697, 770, 852, 941];
+const DTMF_HIGH_FREQUENCIES = [1209, 1336, 1477, 1633];
+const DTMF_KEYPAD_MAP = {
+  "697:1209": "1",
+  "697:1336": "2",
+  "697:1477": "3",
+  "697:1633": "A",
+  "770:1209": "4",
+  "770:1336": "5",
+  "770:1477": "6",
+  "770:1633": "B",
+  "852:1209": "7",
+  "852:1336": "8",
+  "852:1477": "9",
+  "852:1633": "C",
+  "941:1209": "*",
+  "941:1336": "0",
+  "941:1477": "#",
+  "941:1633": "D",
+};
+
 const PHONE_MULTITAP_MAP = {
   0: [" ", "0"],
   1: [".", ",", "?", "!", "1", "-", "@", "_", "+", "#"],
@@ -3302,6 +3323,30 @@ function removeShortActivity(flags, minRun) {
   return output;
 }
 
+function buildAudioRunsFromFlags(activeFlags, hopSize, windowSize, sampleCount, sampleRate) {
+  const runs = [];
+  let runStart = 0;
+  for (let index = 1; index <= activeFlags.length; index += 1) {
+    if (index < activeFlags.length && activeFlags[index] === activeFlags[runStart]) {
+      continue;
+    }
+    const active = activeFlags[runStart];
+    const startSeconds = (runStart * hopSize) / sampleRate;
+    const endSample = index >= activeFlags.length ? sampleCount : Math.min(sampleCount, (index - 1) * hopSize + windowSize);
+    const endSeconds = endSample / sampleRate;
+    runs.push({
+      active,
+      startSeconds,
+      endSeconds,
+      durationSeconds: Math.max(0, endSeconds - startSeconds),
+      startSample: runStart * hopSize,
+      endSample,
+    });
+    runStart = index;
+  }
+  return runs;
+}
+
 function estimateToneFrequency(samples, sampleRate) {
   if (!samples || samples.length < 8 || !sampleRate) {
     return 0;
@@ -3351,6 +3396,146 @@ function dominantGoertzelFrequency(samples, start, length, sampleRate, frequenci
     }
   });
   return bestFrequency;
+}
+
+function rankGoertzelFrequencies(samples, start, length, sampleRate, frequencies) {
+  return frequencies
+    .map((frequency) => ({
+      frequency,
+      power: goertzelPower(samples, start, length, sampleRate, frequency),
+    }))
+    .sort((left, right) => right.power - left.power);
+}
+
+function classifyDtmfSegment(samples, start, length, sampleRate) {
+  if (!samples || length < 48 || sampleRate < 3600) {
+    return null;
+  }
+
+  const lowRanked = rankGoertzelFrequencies(samples, start, length, sampleRate, DTMF_LOW_FREQUENCIES);
+  const highRanked = rankGoertzelFrequencies(samples, start, length, sampleRate, DTMF_HIGH_FREQUENCIES);
+  const low = lowRanked[0];
+  const high = highRanked[0];
+  const key = DTMF_KEYPAD_MAP[`${low.frequency}:${high.frequency}`];
+  if (!key) {
+    return null;
+  }
+
+  const selected = new Set([low.frequency, high.frequency]);
+  const thirdPower =
+    lowRanked
+      .concat(highRanked)
+      .filter((item) => !selected.has(item.frequency))
+      .sort((left, right) => right.power - left.power)[0]?.power || 0;
+  const lowRatio = low.power / Math.max(lowRanked[1]?.power || 0, 1e-9);
+  const highRatio = high.power / Math.max(highRanked[1]?.power || 0, 1e-9);
+  const pairRatio = Math.min(low.power, high.power) / Math.max(thirdPower, 1e-9);
+  const twistRatio = Math.max(low.power, high.power) / Math.max(Math.min(low.power, high.power), 1e-9);
+  const signalFloor = length * length * 1e-7;
+
+  if (low.power < signalFloor || high.power < signalFloor || lowRatio < 2.2 || highRatio < 2.2 || pairRatio < 1.6 || twistRatio > 18) {
+    return null;
+  }
+
+  return {
+    key,
+    lowFrequency: low.frequency,
+    highFrequency: high.frequency,
+    confidence: Math.max(0, Math.min(1, Math.log2(Math.min(lowRatio, highRatio, pairRatio)) / 5)),
+  };
+}
+
+function buildDtmfFlagGuesses(decoded) {
+  const value = String(decoded || "").trim();
+  if (
+    value.length < 6 ||
+    value.length > 120 ||
+    value.includes("{") ||
+    !/[A-Za-z]/.test(value) ||
+    /[^\x20-\x7e]/.test(value) ||
+    !/^[A-Za-z0-9 _.,!?@#+=-]+$/.test(value)
+  ) {
+    return [];
+  }
+
+  const compact = value
+    .replace(/\s+/g, "_")
+    .replace(/[^A-Za-z0-9_.,!?@#+=-]/g, "")
+    .replace(/^[_.-]+|[_.-]+$/g, "");
+  if (compact.length < 6 || !/[A-Za-z]{4}/.test(compact)) {
+    return [];
+  }
+  return [`FLAG{${compact}}`];
+}
+
+function decodeDtmfFromRuns(track, runs) {
+  if (!track || !runs?.length || track.sampleRate < 3600) {
+    return [];
+  }
+
+  const events = [];
+  runs
+    .filter((run) => run.active && run.durationSeconds >= 0.04)
+    .forEach((run) => {
+      const rawStart = Math.max(0, Math.round(run.startSample));
+      const rawEnd = Math.min(track.samples.length, Math.round(run.endSample));
+      const rawLength = rawEnd - rawStart;
+      if (rawLength < Math.round(track.sampleRate * 0.035)) {
+        return;
+      }
+      const trim = Math.min(Math.round(track.sampleRate * 0.012), Math.floor(rawLength * 0.2));
+      const start = rawStart + trim;
+      const length = rawLength - trim * 2;
+      const classified = classifyDtmfSegment(track.samples, start, length, track.sampleRate);
+      if (!classified) {
+        return;
+      }
+
+      const previous = events.at(-1);
+      if (previous && previous.key === classified.key && run.startSeconds - previous.endSeconds < 0.005) {
+        previous.endSeconds = run.endSeconds;
+        previous.confidence = Math.max(previous.confidence, classified.confidence);
+        return;
+      }
+
+      events.push({
+        ...classified,
+        startSeconds: run.startSeconds,
+        endSeconds: run.endSeconds,
+        durationSeconds: run.durationSeconds,
+      });
+    });
+
+  if (events.length < 4) {
+    return [];
+  }
+
+  const keySequence = events.map((event) => event.key).join("");
+  const decoded = decodePhoneMultitap(keySequence);
+  const normalized = normalizeSpokenFlagBrackets(decoded);
+  const flagGuesses = buildDtmfFlagGuesses(normalized);
+  const flags = findFlagCandidates([keySequence, decoded, normalized, ...flagGuesses].join("\n"), "WAV DTMF");
+  const readable =
+    normalized.length >= 6 &&
+    /[A-Za-z]/.test(normalized) &&
+    !/[?]/.test(normalized) &&
+    scorePrintableRatio(Buffer.from(normalized, "utf8")) > 0.8;
+
+  if (!flags.length && !flagGuesses.length && !readable && keySequence.length < 8) {
+    return [];
+  }
+
+  return [
+    {
+      keys: keySequence,
+      decoded,
+      normalized,
+      flagGuesses,
+      flags,
+      confidence: events.reduce((sum, event) => sum + event.confidence, 0) / events.length,
+      events: events.slice(0, 96),
+    },
+  ];
 }
 
 function normalizeSpokenFlagBrackets(text) {
@@ -3556,30 +3741,14 @@ function analyzeWavSignal(buffer, wavInfo, options = {}) {
   }
 
   const threshold = Math.max(0.02, computePercentile(rmsValues, 0.9) * 0.3);
-  let activeFlags = frames.map((frame) => frame.rms >= threshold);
+  const rawActiveFlags = frames.map((frame) => frame.rms >= threshold);
+  const dtmfActiveFlags = removeShortActivity(rawActiveFlags, Math.max(2, Math.round(0.035 / hopSeconds)));
+  let activeFlags = rawActiveFlags.slice();
   activeFlags = fillShortGaps(activeFlags, Math.max(1, Math.round(0.03 / hopSeconds)));
   activeFlags = removeShortActivity(activeFlags, Math.max(2, Math.round(0.04 / hopSeconds)));
 
-  const runs = [];
-  let runStart = 0;
-  for (let index = 1; index <= activeFlags.length; index += 1) {
-    if (index < activeFlags.length && activeFlags[index] === activeFlags[runStart]) {
-      continue;
-    }
-    const active = activeFlags[runStart];
-    const startSeconds = (runStart * hopSize) / track.sampleRate;
-    const endSample = index >= activeFlags.length ? track.samples.length : Math.min(track.samples.length, (index - 1) * hopSize + windowSize);
-    const endSeconds = endSample / track.sampleRate;
-    runs.push({
-      active,
-      startSeconds,
-      endSeconds,
-      durationSeconds: Math.max(0, endSeconds - startSeconds),
-      startSample: runStart * hopSize,
-      endSample,
-    });
-    runStart = index;
-  }
+  const runs = buildAudioRunsFromFlags(activeFlags, hopSize, windowSize, track.samples.length, track.sampleRate);
+  const dtmfRuns = buildAudioRunsFromFlags(dtmfActiveFlags, hopSize, windowSize, track.samples.length, track.sampleRate);
 
   const activeSegments = runs
     .filter((item) => item.active && item.durationSeconds >= 0.04)
@@ -3595,6 +3764,7 @@ function analyzeWavSignal(buffer, wavInfo, options = {}) {
 
   const dominantFrequencies = summarizeDominantFrequencies(activeSegments);
   const morseCandidates = decodeMorseFromRuns(runs);
+  const dtmfCandidates = decodeDtmfFromRuns(track, dtmfRuns);
   const alphabetTone = options.decodeAlphabet === false ? null : decodeAlphabetToneWav(buffer, wavInfo);
 
   return {
@@ -3603,6 +3773,7 @@ function analyzeWavSignal(buffer, wavInfo, options = {}) {
     activeSegments,
     dominantFrequencies,
     morseCandidates,
+    dtmfCandidates,
     alphabetTone,
   };
 }
@@ -8653,6 +8824,25 @@ async function buildArtifactSignals(filePath) {
           return { value, source };
         });
       }
+      if (audioSignal?.dtmfCandidates?.length) {
+        artifact.highlights.push(
+          `检测到 DTMF 候选：${audioSignal.dtmfCandidates[0].keys}${audioSignal.dtmfCandidates[0].decoded ? ` -> ${audioSignal.dtmfCandidates[0].decoded}` : ""}`,
+        );
+        artifact.keywords.push("dtmf", "phone", "multitap", "tone");
+        const dtmfFlags = audioSignal.dtmfCandidates.flatMap((candidate) =>
+          candidate.flags.concat(candidate.flagGuesses.flatMap((guess) => findFlagCandidates(guess, `${artifact.name} (DTMF guess)`))),
+        );
+        if (dtmfFlags.length) {
+          artifact.flagCandidates = dedupeStrings(
+            artifact.flagCandidates
+              .map((item) => `${item.value}@@${item.source}`)
+              .concat(dtmfFlags.map((flag) => `${flag.value}@@${flag.source}`)),
+          ).map((entry) => {
+            const [value, source] = entry.split("@@");
+            return { value, source };
+          });
+        }
+      }
       artifact.actions.push({
         id: "extract-audio-clues",
         label: "\u63d0\u53d6\u97f3\u9891\u7ebf\u7d22",
@@ -10830,6 +11020,21 @@ function buildAudioSummaryText(fileName, wavInfo, lsbCandidates, audioSignal, st
         lines.push("");
       });
     }
+    if (audioSignal.dtmfCandidates?.length) {
+      lines.push("# DTMF CANDIDATES");
+      audioSignal.dtmfCandidates.forEach((candidate, index) => {
+        lines.push(`${index + 1}. keys: ${candidate.keys}`);
+        if (candidate.decoded) {
+          lines.push(`multitap: ${candidate.decoded}`);
+        }
+        if (candidate.normalized && candidate.normalized !== candidate.decoded) {
+          lines.push(`normalized: ${candidate.normalized}`);
+        }
+        candidate.flagGuesses.forEach((guess) => lines.push(`guess: ${guess}`));
+        lines.push(`confidence: ${candidate.confidence.toFixed(2)}`);
+        lines.push("");
+      });
+    }
     if (audioSignal.alphabetTone) {
       lines.push("# ALPHABET TONE MAPPING");
       lines.push(`tone-duration: ${audioSignal.alphabetTone.durationMs} ms`);
@@ -10873,7 +11078,11 @@ function extractAudioClues(filePath, outputRoot) {
 
   const hasSignal =
     audioSignal &&
-    (audioSignal.activeSegments.length || audioSignal.morseCandidates.length || audioSignal.dominantFrequencies.length || audioSignal.alphabetTone);
+    (audioSignal.activeSegments.length ||
+      audioSignal.morseCandidates.length ||
+      audioSignal.dtmfCandidates?.length ||
+      audioSignal.dominantFrequencies.length ||
+      audioSignal.alphabetTone);
   if (!wavInfo && !lsbCandidates.length && !strings.length && !hasSignal) {
     throw new Error("\u6ca1\u6709\u4ece\u97f3\u9891\u9644\u4ef6\u4e2d\u63d0\u53d6\u5230\u9ad8\u4fe1\u53f7\u7ebf\u7d22\u3002");
   }
@@ -10928,6 +11137,32 @@ function extractAudioClues(filePath, outputRoot) {
     });
     createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-audio-morse.txt`, `${morseLines.join("\n")}\n`));
   }
+  if (audioSignal?.dtmfCandidates?.length) {
+    const dtmfLines = [`# AUDIO DTMF`, `file: ${path.basename(filePath)}`, ""];
+    audioSignal.dtmfCandidates.forEach((candidate, index) => {
+      dtmfLines.push(`${index + 1}. keys: ${candidate.keys}`);
+      if (candidate.decoded) {
+        dtmfLines.push(`phone-multitap: ${candidate.decoded}`);
+      }
+      if (candidate.normalized && candidate.normalized !== candidate.decoded) {
+        dtmfLines.push(`normalized: ${candidate.normalized}`);
+      }
+      if (candidate.flagGuesses.length) {
+        dtmfLines.push("format guesses:");
+        candidate.flagGuesses.forEach((guess) => dtmfLines.push(guess));
+      }
+      if (candidate.events.length) {
+        dtmfLines.push("events:");
+        candidate.events.forEach((event, eventIndex) => {
+          dtmfLines.push(
+            `${eventIndex + 1}. ${event.key} ${event.lowFrequency}+${event.highFrequency}Hz ${event.startSeconds.toFixed(3)}s-${event.endSeconds.toFixed(3)}s`,
+          );
+        });
+      }
+      dtmfLines.push("");
+    });
+    createdFiles.push(writeGeneratedFile(outputRoot, `${baseName}-audio-dtmf.txt`, `${dtmfLines.join("\n")}\n`));
+  }
   if (audioSignal?.alphabetTone) {
     const alphabetLines = [
       "# AUDIO ALPHABET TONE MAPPING",
@@ -10944,7 +11179,7 @@ function extractAudioClues(filePath, outputRoot) {
   }
 
   return {
-    message: "\u5df2\u63d0\u53d6 WAV \u5757\u4fe1\u606f\u3001strings\u3001PCM LSB\u3001\u97f3\u8c03\u5206\u6bb5\u3001\u5b57\u6bcd\u8868\u97f3\u8c03\u548c Morse \u5019\u9009\u3002",
+    message: "\u5df2\u63d0\u53d6 WAV \u5757\u4fe1\u606f\u3001strings\u3001PCM LSB\u3001\u97f3\u8c03\u5206\u6bb5\u3001DTMF\u3001\u5b57\u6bcd\u8868\u97f3\u8c03\u548c Morse \u5019\u9009\u3002",
     createdFiles: dedupeStrings(createdFiles),
   };
 }

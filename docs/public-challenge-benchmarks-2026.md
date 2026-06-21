@@ -40,6 +40,7 @@ This document records validation against recently released public CTF challenges
 - Fixed non-x86 ELF Pwn analysis and added lightweight AArch64, ARM, MIPS, and RISC-V return/syscall gadget scanning.
 - Expanded leetspeak fake-flag filtering so obvious decoys do not mark a challenge solved.
 - Added DTMF combined-frequency and phone multitap decoding with challenge-provided flag-format wrapping.
+- Added WAV DTMF tone-pair detection with phone multitap recovery and generated DTMF reports.
 - Added bounded Goertzel-based WAV alphabet-tone mapping.
 - Added fixed-block round-robin file recovery and aligned PNG contact sheets.
 - Added bundled offline English OCR with flag-shape normalization; the full `scrapbooking` pipeline now reaches a solved result.

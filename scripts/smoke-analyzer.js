@@ -40,6 +40,25 @@ const SMOKE_DTMF_COMBINED = {
   9: "2329",
 };
 
+const SMOKE_DTMF_TONES = {
+  1: [697, 1209],
+  2: [697, 1336],
+  3: [697, 1477],
+  A: [697, 1633],
+  4: [770, 1209],
+  5: [770, 1336],
+  6: [770, 1477],
+  B: [770, 1633],
+  7: [852, 1209],
+  8: [852, 1336],
+  9: [852, 1477],
+  C: [852, 1633],
+  "*": [941, 1209],
+  0: [941, 1336],
+  "#": [941, 1477],
+  D: [941, 1633],
+};
+
 const SMOKE_MULTITAP = {
   a: ["2", 1], b: ["2", 2], c: ["2", 3],
   d: ["3", 1], e: ["3", 2], f: ["3", 3],
@@ -58,6 +77,60 @@ function encodeDtmfMultitap(text) {
       return Array.from({ length: count }, () => SMOKE_DTMF_COMBINED[key]).concat("2418");
     })
     .join("");
+}
+
+function encodeDtmfKeySequence(text) {
+  return Array.from(text.toLowerCase())
+    .flatMap((char) => {
+      const [key, count] = SMOKE_MULTITAP[char];
+      return Array.from({ length: count }, () => key).concat("#");
+    })
+    .join("");
+}
+
+function writePcm16Wav(filePath, samples, sampleRate = 8000) {
+  const data = Buffer.alloc(samples.length * 2);
+  samples.forEach((sample, index) => {
+    data.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(sample))), index * 2);
+  });
+  const wav = Buffer.alloc(44 + data.length);
+  wav.write("RIFF", 0);
+  wav.writeUInt32LE(36 + data.length, 4);
+  wav.write("WAVEfmt ", 8);
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(sampleRate, 24);
+  wav.writeUInt32LE(sampleRate * 2, 28);
+  wav.writeUInt16LE(2, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write("data", 36);
+  wav.writeUInt32LE(data.length, 40);
+  data.copy(wav, 44);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, wav);
+  return filePath;
+}
+
+function createDtmfWav(filePath, keySequence, toneMs = 85, gapMs = 45, sampleRate = 8000) {
+  const toneSamples = Math.round((sampleRate * toneMs) / 1000);
+  const gapSamples = Math.round((sampleRate * gapMs) / 1000);
+  const samples = [];
+  Array.from(keySequence).forEach((key) => {
+    const tones = SMOKE_DTMF_TONES[key];
+    if (!tones) {
+      return;
+    }
+    for (let index = 0; index < toneSamples; index += 1) {
+      const low = Math.sin((2 * Math.PI * tones[0] * index) / sampleRate);
+      const high = Math.sin((2 * Math.PI * tones[1] * index) / sampleRate);
+      samples.push((low + high) * 10000);
+    }
+    for (let index = 0; index < gapSamples; index += 1) {
+      samples.push(0);
+    }
+  });
+  return writePcm16Wav(filePath, samples, sampleRate);
 }
 
 function createAlphabetToneWav(filePath, message, toneMs = 75, sampleRate = 8000) {
@@ -1905,6 +1978,24 @@ async function main() {
         artifacts: [dtmfPath],
       },
       dtmfFlag,
+    ),
+  );
+
+  const dtmfAudioMessage = "dtmfaudiosmoke";
+  const dtmfAudioFlag = `FLAG{${dtmfAudioMessage}}`;
+  const dtmfAudioPath = createDtmfWav(path.join(root, "input", "dtmf-audio.wav"), encodeDtmfKeySequence(dtmfAudioMessage));
+  results.push(
+    await runReportFlagCase(
+      root,
+      "wav-dtmf-multitap",
+      {
+        title: "WAV DTMF phone multitap smoke",
+        description: "Decode the DTMF tones and wrap the decoded message in FLAG{}.",
+        artifacts: [dtmfAudioPath],
+      },
+      dtmfAudioFlag,
+      "-audio-dtmf.txt",
+      /phone-multitap:\s*dtmfaudiosmoke/i,
     ),
   );
 
