@@ -185,7 +185,6 @@ const WORKSPACE_VERSION = 1;
 const EVIDENCE_STATUSES = ["todo", "checking", "confirmed"];
 let persistenceReady = false;
 let saveTimer = null;
-let sidebarHoverTimer = null;
 
 const elements = {
   body: document.body,
@@ -525,7 +524,6 @@ function toggleTheme() {
 function setSidebarCollapsed(collapsed) {
   state.sidebarCollapsed = collapsed;
   elements.body.classList.toggle("sidebar-collapsed", collapsed);
-  elements.body.classList.remove("sidebar-hover-expanded");
   localStorage.setItem("ctf-sidebar-collapsed", String(collapsed));
   if (elements.sidebarToggle) {
     elements.sidebarToggle.setAttribute("aria-expanded", String(!collapsed));
@@ -536,46 +534,6 @@ function setSidebarCollapsed(collapsed) {
 
 function toggleSidebar() {
   setSidebarCollapsed(!state.sidebarCollapsed);
-}
-
-function bindSidebarHover() {
-  if (!elements.sidebar) {
-    return;
-  }
-
-  function scheduleTemporaryExpansion(expanded, delay) {
-    window.clearTimeout(sidebarHoverTimer);
-    sidebarHoverTimer = window.setTimeout(() => {
-      if (!state.sidebarCollapsed) {
-        elements.body.classList.remove("sidebar-hover-expanded");
-        return;
-      }
-      elements.body.classList.toggle("sidebar-hover-expanded", expanded);
-    }, delay);
-  }
-
-  elements.sidebar.addEventListener("pointerenter", () => {
-    scheduleTemporaryExpansion(true, 90);
-  });
-
-  elements.sidebar.addEventListener("pointerleave", () => {
-    scheduleTemporaryExpansion(false, 180);
-  });
-
-  elements.sidebar.addEventListener("focusin", () => {
-    window.clearTimeout(sidebarHoverTimer);
-    if (state.sidebarCollapsed) {
-      elements.body.classList.add("sidebar-hover-expanded");
-    }
-  });
-
-  elements.sidebar.addEventListener("focusout", () => {
-    window.setTimeout(() => {
-      if (state.sidebarCollapsed && !elements.sidebar.contains(document.activeElement)) {
-        elements.body.classList.remove("sidebar-hover-expanded");
-      }
-    }, 0);
-  });
 }
 
 function uniqArtifacts(items) {
@@ -2056,7 +2014,6 @@ elements.navItems.forEach((button) => {
 });
 
 bindClick(elements.sidebarToggle, toggleSidebar);
-bindSidebarHover();
 bindClick(elements.themeToggle, toggleTheme);
 bindClick(elements.settingsThemeToggle, toggleTheme);
 bindClick(elements.exportReportButton, exportReport);

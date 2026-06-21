@@ -27,8 +27,7 @@
   --label-font: "Cascadia Code", "SFMono-Regular", Consolas, "Microsoft YaHei UI", monospace;
 }
 
-body:not(.sidebar-collapsed),
-body.sidebar-hover-expanded {
+body:not(.sidebar-collapsed) {
   --sidebar-width: 268px;
 }
 
@@ -152,8 +151,7 @@ svg circle {
   justify-self: center;
 }
 
-body:not(.sidebar-collapsed) .sidebar-toggle,
-body.sidebar-hover-expanded .sidebar-toggle {
+body:not(.sidebar-collapsed) .sidebar-toggle {
   justify-self: end;
 }
 
@@ -173,8 +171,7 @@ body.sidebar-hover-expanded .sidebar-toggle {
   gap: 12px;
 }
 
-body:not(.sidebar-collapsed) .brand,
-body.sidebar-hover-expanded .brand {
+body:not(.sidebar-collapsed) .brand {
   justify-content: flex-start;
   padding: 0 4px;
 }
@@ -201,8 +198,7 @@ body.sidebar-hover-expanded .brand {
     transform 220ms ease;
 }
 
-body:not(.sidebar-collapsed) .brand-copy,
-body.sidebar-hover-expanded .brand-copy {
+body:not(.sidebar-collapsed) .brand-copy {
   opacity: 1;
   pointer-events: auto;
   transform: translateX(0);
@@ -241,8 +237,7 @@ body.sidebar-hover-expanded .brand-copy {
   box-shadow: 0 0 0 3px var(--surface);
 }
 
-body:not(.sidebar-collapsed) .sidebar-state-dot,
-body.sidebar-hover-expanded .sidebar-state-dot {
+body:not(.sidebar-collapsed) .sidebar-state-dot {
   display: none;
 }
 
@@ -273,8 +268,7 @@ body.sidebar-hover-expanded .sidebar-state-dot {
     color 150ms ease;
 }
 
-body:not(.sidebar-collapsed) .nav-item,
-body.sidebar-hover-expanded .nav-item {
+body:not(.sidebar-collapsed) .nav-item {
   justify-content: flex-start;
   padding: 0 12px;
 }
@@ -307,8 +301,7 @@ body.sidebar-hover-expanded .nav-item {
   transition: opacity 220ms ease;
 }
 
-body:not(.sidebar-collapsed) .nav-item > span:not(.nav-icon):not(.nav-count),
-body.sidebar-hover-expanded .nav-item > span:not(.nav-icon):not(.nav-count) {
+body:not(.sidebar-collapsed) .nav-item > span:not(.nav-icon):not(.nav-count) {
   width: auto;
   opacity: 1;
 }
@@ -327,7 +320,7 @@ body.sidebar-hover-expanded .nav-item > span:not(.nav-icon):not(.nav-count) {
   font-weight: 700;
 }
 
-body.sidebar-collapsed:not(.sidebar-hover-expanded) .nav-count {
+body.sidebar-collapsed .nav-count {
   position: absolute;
   right: 6px;
   top: 5px;
@@ -350,7 +343,7 @@ body.sidebar-collapsed:not(.sidebar-hover-expanded) .nav-count {
     transform 220ms ease;
 }
 
-body.sidebar-collapsed:not(.sidebar-hover-expanded) .sidebar-footer {
+body.sidebar-collapsed .sidebar-footer {
   opacity: 0;
   pointer-events: none;
   transform: translateY(8px);
@@ -1789,8 +1782,7 @@ body[data-view="settings"] .header-actions {
 
 @media (max-width: 860px) {
   body,
-  body:not(.sidebar-collapsed),
-  body.sidebar-hover-expanded {
+  body:not(.sidebar-collapsed) {
     --sidebar-width: 78px;
   }
 
@@ -1798,34 +1790,28 @@ body[data-view="settings"] .header-actions {
     padding-inline: 10px;
   }
 
-  body:not(.sidebar-collapsed) .sidebar-toggle,
-  body.sidebar-hover-expanded .sidebar-toggle {
+  body:not(.sidebar-collapsed) .sidebar-toggle {
     justify-self: center;
   }
 
-  body:not(.sidebar-collapsed) .brand,
-  body.sidebar-hover-expanded .brand {
+  body:not(.sidebar-collapsed) .brand {
     justify-content: center;
     padding: 0;
   }
 
   body:not(.sidebar-collapsed) .brand-copy,
-  body.sidebar-hover-expanded .brand-copy,
-  body:not(.sidebar-collapsed) .nav-item > span:not(.nav-icon):not(.nav-count),
-  body.sidebar-hover-expanded .nav-item > span:not(.nav-icon):not(.nav-count) {
+  body:not(.sidebar-collapsed) .nav-item > span:not(.nav-icon):not(.nav-count) {
     width: 0;
     opacity: 0;
     pointer-events: none;
   }
 
-  body:not(.sidebar-collapsed) .nav-item,
-  body.sidebar-hover-expanded .nav-item {
+  body:not(.sidebar-collapsed) .nav-item {
     justify-content: center;
     padding: 0 12px;
   }
 
-  body:not(.sidebar-collapsed) .sidebar-state-dot,
-  body.sidebar-hover-expanded .sidebar-state-dot {
+  body:not(.sidebar-collapsed) .sidebar-state-dot {
     display: block;
   }
 
