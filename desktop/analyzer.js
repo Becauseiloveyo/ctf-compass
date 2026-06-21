@@ -627,6 +627,43 @@ function base58Decode(value) {
   return Buffer.from(bytes);
 }
 
+function base45Decode(value) {
+  const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+  const cleaned = String(value || "").replace(/\s+/g, "");
+  if (!cleaned || cleaned.length === 1) {
+    throw new Error("Invalid base45 length");
+  }
+
+  const bytes = [];
+  for (let index = 0; index < cleaned.length; ) {
+    const chunkLength = index + 2 === cleaned.length ? 2 : 3;
+    if (index + chunkLength > cleaned.length) {
+      throw new Error("Invalid base45 chunk");
+    }
+    let value45 = 0;
+    for (let digit = 0; digit < chunkLength; digit += 1) {
+      const decoded = alphabet.indexOf(cleaned[index + digit]);
+      if (decoded === -1) {
+        throw new Error("Invalid base45");
+      }
+      value45 += decoded * 45 ** digit;
+    }
+    if (chunkLength === 2) {
+      if (value45 > 0xff) {
+        throw new Error("Invalid base45 byte");
+      }
+      bytes.push(value45);
+    } else {
+      if (value45 > 0xffff) {
+        throw new Error("Invalid base45 word");
+      }
+      bytes.push((value45 >> 8) & 0xff, value45 & 0xff);
+    }
+    index += chunkLength;
+  }
+  return Buffer.from(bytes);
+}
+
 function base91Decode(value) {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&()*+,./:;<=>?@[]^_`{|}~\"";
   const table = new Map(Array.from(alphabet).map((char, index) => [char, index]));
@@ -1251,6 +1288,35 @@ function collectUuencodeDecodes(text, bucket) {
   addDerivedTextResult(bucket, "uuencode", "UUEncode", decodeUuencodeBlock(text), { scoreBoost: 0.8 });
 }
 
+function collectBase45Decodes(text, bucket) {
+  const alphabetPattern = /[0-9A-Z $%*+\-./:]/;
+  const source = String(text || "");
+  const candidates = dedupeStrings(
+    source
+      .split(/\r?\n/)
+      .concat(source)
+      .flatMap((line) => line.match(/[0-9A-Z $%*+\-./:]{8,}/g) || [])
+      .map((line) => line.trim())
+      .filter((line) => {
+        const compact = line.replace(/\s+/g, "");
+        if (compact.length < 8 || compact.length > 512) {
+          return false;
+        }
+        const validChars = Array.from(line).filter((char) => alphabetPattern.test(char)).length;
+        return validChars / line.length > 0.96;
+      })
+      .slice(0, 12),
+  );
+
+  candidates.forEach((value) => {
+    try {
+      collectTextVariantsFromBuffer(base45Decode(value), "BASE45", bucket);
+    } catch (_error) {
+      // ignore invalid Base45 candidates
+    }
+  });
+}
+
 function collectBase91Decodes(text, bucket) {
   const alphabetPattern = /[A-Za-z0-9!#$%&()*+,./:;<=>?@[\]^_`{|}~"]/;
   const source = String(text || "");
@@ -1788,6 +1854,7 @@ function smartDecodeTextContent(buffer) {
   collectDna2BitDecodes(text, results);
   collectQuotedPrintableDecodes(text, results);
   collectUuencodeDecodes(text, results);
+  collectBase45Decodes(text, results);
   collectBase91Decodes(text, results);
   collectZ85Decodes(text, results);
   collectMorseTextDecodes(text, results);
@@ -12531,8 +12598,15 @@ function shouldAutoRun(actionId, artifact) {
   if (actionId === "extract-forensic-container") {
     return artifact.depth === 0 && ["DISK", "MEMORY"].includes(artifact.badge);
   }
-  if (actionId === "extract-png-text" || actionId === "extract-png-lsb") {
-    return artifact.depth < MAX_PIPELINE_DEPTH && !/(?:usb-mouse-track|usb-controller-.*-stick)/i.test(artifact.name);
+  if (actionId === "extract-png-text") {
+    return artifact.depth < MAX_PIPELINE_DEPTH && (artifact.highlights || []).some((item) => /PNG .*文本块/.test(item));
+  }
+  if (actionId === "extract-png-lsb") {
+    return (
+      artifact.depth < MAX_PIPELINE_DEPTH &&
+      !/(?:usb-mouse-track|usb-controller-.*-stick)/i.test(artifact.name) &&
+      (artifact.highlights || []).some((item) => /低位平面.*命中/.test(item))
+    );
   }
   if (actionId === "repair-png-dimensions") {
     return artifact.badge === "PNG" && artifact.depth === 0;

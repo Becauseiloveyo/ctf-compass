@@ -3,6 +3,8 @@ const path = require("path");
 const zlib = require("zlib");
 const crypto = require("crypto");
 const AdmZip = require("adm-zip");
+const bwipjs = require("bwip-js");
+const QRCode = require("qrcode");
 const { PNG } = require("pngjs");
 const { analyzeChallenge } = require("../desktop/analyzer");
 
@@ -1306,6 +1308,31 @@ function createPngWrongDimensions(filePath, width = 64, height = 24) {
   return filePath;
 }
 
+async function createQrCodePng(filePath, text) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  await QRCode.toFile(filePath, text, {
+    errorCorrectionLevel: "M",
+    margin: 2,
+    scale: 8,
+  });
+  return filePath;
+}
+
+async function createCode128Png(filePath, text) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const buffer = await bwipjs.toBuffer({
+    bcid: "code128",
+    text,
+    scale: 4,
+    height: 18,
+    includetext: false,
+    paddingwidth: 24,
+    paddingheight: 24,
+  });
+  fs.writeFileSync(filePath, buffer);
+  return filePath;
+}
+
 async function runPngDimensionCase(root, pngPath) {
   const result = await analyzeChallenge(
     {
@@ -1730,6 +1757,28 @@ function base91Encode(text) {
     }
   }
 
+  return output;
+}
+
+function base45Encode(text) {
+  const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+  const bytes = Buffer.from(text, "utf8");
+  let output = "";
+  for (let index = 0; index < bytes.length; index += 2) {
+    if (index + 1 < bytes.length) {
+      let value = bytes[index] * 256 + bytes[index + 1];
+      output += alphabet[value % 45];
+      value = Math.floor(value / 45);
+      output += alphabet[value % 45];
+      value = Math.floor(value / 45);
+      output += alphabet[value % 45];
+    } else {
+      let value = bytes[index];
+      output += alphabet[value % 45];
+      value = Math.floor(value / 45);
+      output += alphabet[value % 45];
+    }
+  }
   return output;
 }
 
@@ -2200,6 +2249,42 @@ async function main() {
   const wrongDimensionPng = createPngWrongDimensions(path.join(root, "input", "wrong-dimensions.png"));
   results.push(await runPngDimensionCase(root, wrongDimensionPng));
 
+  const qrFlag = "flag{qr_code_image_smoke}";
+  const qrPath = await createQrCodePng(path.join(root, "input", "qr-code.png"), qrFlag);
+  results.push(
+    await runReportFlagCase(
+      root,
+      "qr-code-image",
+      {
+        title: "QR code image smoke",
+        description: "Decode a visible QR code from a challenge image.",
+        tags: ["misc", "image", "qr"],
+        artifacts: [qrPath],
+      },
+      qrFlag,
+      "-qr.txt",
+      /flag\{qr_code_image_smoke\}/,
+    ),
+  );
+
+  const barcodeFlag = "flag{code128_barcode_smoke}";
+  const barcodePath = await createCode128Png(path.join(root, "input", "code128.png"), barcodeFlag);
+  results.push(
+    await runReportFlagCase(
+      root,
+      "code128-barcode-image",
+      {
+        title: "Code128 barcode smoke",
+        description: "Decode a one-dimensional barcode from a challenge image.",
+        tags: ["misc", "image", "barcode"],
+        artifacts: [barcodePath],
+      },
+      barcodeFlag,
+      "-barcode.txt",
+      /flag\{code128_barcode_smoke\}/,
+    ),
+  );
+
   const modelFlag = "flag{model_metadata_smoke}";
   const modelPath = createSafetensorsFixture(path.join(root, "input", "challenge.safetensors"), modelFlag);
   results.push(await runModelCase(root, modelPath, modelFlag));
@@ -2361,6 +2446,21 @@ async function main() {
         artifacts: [uuencodePath],
       },
       uuencodeFlag,
+    ),
+  );
+
+  const base45Flag = "FLAG-BASE45-SMOKE";
+  const base45Path = writeText(path.join(root, "input", "base45.txt"), `${base45Encode(base45Flag)}\n`);
+  results.push(
+    await runCase(
+      root,
+      "base45-text",
+      {
+        title: "base45 smoke",
+        description: "Base45 text should decode locally.",
+        artifacts: [base45Path],
+      },
+      base45Flag,
     ),
   );
 
